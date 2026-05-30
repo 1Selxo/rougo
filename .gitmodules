@@ -1,0 +1,3 @@
+[submodule "hoshidicts"]
+	path = hoshidicts
+	url = https://github.com/kaihouguide/rougo.git
