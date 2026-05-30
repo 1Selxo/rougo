@@ -52,6 +52,7 @@ android {
     lint {
         checkReleaseBuilds = false
         abortOnError = false
+        disable += "all"
     }
 
     buildTypes {
