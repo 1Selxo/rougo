@@ -1,0 +1,49 @@
+ninja: Entering directory `C:\Users\basel\MyApplication\hoshidicts\.cxx\RelWithDebInfo\1d8691v2\arm64-v8a'
+[1/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/debug.c.o
+[2/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/threading.c.o
+[3/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/pool.c.o
+[4/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/xxhash.c.o
+[5/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/error_private.c.o
+[6/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/entropy_common.c.o
+[7/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/fse_decompress.c.o
+[8/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/common/zstd_common.c.o
+[9/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/hist.c.o
+[10/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/fse_compress.c.o
+[11/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_compress_literals.c.o
+[12/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_compress_superblock.c.o
+[13/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/huf_compress.c.o
+[14/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_compress_sequences.c.o
+[15/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_preSplit.c.o
+[16/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_fast.c.o
+[17/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_opt.c.o
+[18/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_ldm.c.o
+[19/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstdmt_compress.c.o
+[20/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_double_fast.c.o
+[21/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/decompress/zstd_decompress.c.o
+[22/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/decompress/zstd_ddict.c.o
+[23/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/dictBuilder/cover.c.o
+[24/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_compress.c.o
+[25/43] Building CXX object CMakeFiles/hoshidicts.dir/src/text_processor/text_processor.cpp.o
+[26/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/dictBuilder/fastcover.c.o
+[27/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/decompress/zstd_decompress_block.c.o
+[28/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/dictBuilder/zdict.c.o
+[29/43] Building CXX object CMakeFiles/hoshidicts.dir/src/hash/hash.cpp.o
+[30/43] Building C object deps/external_zip/CMakeFiles/zip.dir/src/zip.c.o
+In file included from C:/Users/basel/MyApplication/hoshidicts/external/zip/src/zip.c:37:
+C:/Users/basel/MyApplication/hoshidicts/external/zip/src/miniz.h:5143:9: warning: Using fopen, ftello, fseeko, stat() etc. path for file I/O - this path may not support large files. [-W#pragma-messages]
+ 5143 | #pragma message(                                                               \
+      |         ^
+1 warning generated.
+[31/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/decompress/huf_decompress.c.o
+[32/43] Linking C static library deps\external_zip\libzip.a
+[33/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/dictBuilder/divsufsort.c.o
+[34/43] Building CXX object CMakeFiles/hoshidicts_jni.dir/hoshidicts_jni.cpp.o
+[35/43] Building C object deps/external_zstd/build/cmake/lib/CMakeFiles/libzstd_static.dir/__/__/__/lib/compress/zstd_lazy.c.o
+[36/43] Linking C static library deps\external_zstd\build\cmake\lib\libzstd.a
+[37/43] Building CXX object CMakeFiles/hoshidicts.dir/src/lookup.cpp.o
+[38/43] Building CXX object CMakeFiles/hoshidicts.dir/src/query.cpp.o
+[39/43] Building CXX object CMakeFiles/hoshidicts.dir/src/json/yomitan_parser.cpp.o
+[40/43] Building CXX object CMakeFiles/hoshidicts.dir/src/deconjugator/deconjugator.cpp.o
+[41/43] Building CXX object CMakeFiles/hoshidicts.dir/src/importer.cpp.o
+[42/43] Linking CXX static library libhoshidicts.a
+[43/43] Linking CXX shared library ..\..\..\..\build\intermediates\cxx\RelWithDebInfo\1d8691v2\obj\arm64-v8a\libhoshidicts_jni.so

@@ -527,9 +527,11 @@ fun MainAppFlow(sharedUrl: String?, onSharedUrlProcessed: () -> Unit) {
 @Composable
 fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem) -> Unit) {
     val context = LocalContext.current
-    var status by remember { mutableStateOf("Fetching available qualities...") }
+    var status by remember { mutableStateOf("Fetching video info...") }
     var videoInfo by remember { mutableStateOf<VideoInfo?>(null) }
     var selectedFormat by remember { mutableStateOf<VideoFormat?>(null) }
+    var selectedSubtitleKey by remember { mutableStateOf<String?>(null) } // "ja", "en", etc.
+    var isAutoSub by remember { mutableStateOf(false) }
     var isProcessing by remember { mutableStateOf(false) }
 
     LaunchedEffect(url) {
@@ -548,10 +550,27 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
     }
 
     LaunchedEffect(selectedFormat) {
-        selectedFormat?.let { format ->
+        if (selectedFormat != null) {
             isProcessing = true
-            status = "Extracting Subtitles..."
-            withContext(Dispatchers.IO) {
+            status = "Resolving Stream..."
+            
+            val newItem = LibraryItem(
+                id = UUID.randomUUID().toString(),
+                title = videoInfo?.title ?: "YouTube Stream",
+                mediaUri = selectedFormat?.url ?: videoInfo?.url ?: url,
+                subtitleUri = null,
+                progress = 0L,
+                duration = 0L,
+                isVideo = selectedFormat?.vcodec != "none",
+                sourceUrl = url,
+                formatId = selectedFormat?.formatId
+            )
+            
+            // Start playback IMMEDIATELY with the resolved URL
+            onComplete(newItem)
+
+            // Load subtitles in the background WITHOUT blocking the user
+            CoroutineScope(Dispatchers.IO).launch {
                 try {
                     val destDir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "RougoSubs")
                     destDir.mkdirs()
@@ -560,45 +579,27 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
                     val request = YoutubeDLRequest(url)
                     request.addOption("--no-update")
                     request.addOption("--skip-download")
-                    request.addOption("--write-auto-subs")
-                    request.addOption("--write-subs")
-                    request.addOption("--sub-langs", "ja,en,all")
-                    request.addOption("--convert-subs", "srt")
+                    
+                    if (selectedSubtitleKey != null) {
+                        if (isAutoSub) {
+                            request.addOption("--write-auto-subs")
+                        } else {
+                            request.addOption("--write-subs")
+                        }
+                        request.addOption("--sub-langs", selectedSubtitleKey!!)
+                        request.addOption("--convert-subs", "srt")
+                    }
+
                     request.addOption("-o", "${destDir.absolutePath}/$fileId.%(ext)s")
 
-                    var subFile: File? = null
-
-                    try {
-                        YoutubeDL.getInstance().execute(request, fileId)
-                        destDir.listFiles()?.filter { it.name.startsWith(fileId) }?.forEach { file ->
-                            if (file.extension in listOf("srt", "vtt", "ass")) {
-                                if (subFile == null || file.name.contains(".ja.")) subFile = file
-                            }
-                        }
-                    } catch (subErr: Exception) { subErr.printStackTrace() }
-
-                    val isVideo = format.vcodec != "none"
-                    val newItem = LibraryItem(
-                        id = UUID.randomUUID().toString(),
-                        title = videoInfo?.title ?: "YouTube Stream",
-                        mediaUri = format.url ?: videoInfo?.url ?: url,
-                        subtitleUri = subFile?.let { Uri.fromFile(it).toString() },
-                        progress = 0L,
-                        duration = 0L,
-                        isVideo = isVideo,
-                        sourceUrl = url,
-                        formatId = format.formatId
-                    )
-
-                    withContext(Dispatchers.Main) { onComplete(newItem) }
-
-                } catch (e: Exception) {
-                    withContext(Dispatchers.Main) {
-                        status = "Error extracting stream: ${e.localizedMessage}"
-                        delay(3000)
-                        onDismiss()
+                    YoutubeDL.getInstance().execute(request, fileId)
+                    
+                    val subFile = destDir.listFiles()?.find { it.name.startsWith(fileId) && (it.extension == "srt" || it.name.contains(".srt")) }
+                    if (subFile != null) {
+                        val updatedItem = newItem.copy(subtitleUri = Uri.fromFile(subFile).toString())
+                        LibraryManager(context).saveItem(updatedItem)
                     }
-                }
+                } catch (e: Exception) { e.printStackTrace() }
             }
         }
     }
@@ -616,26 +617,59 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
                         color = MaterialTheme.colorScheme.primary, trackColor = Color.DarkGray
                     )
                 } else {
-                    Text("Select a quality to stream:", color = Color.LightGray, fontSize = 14.sp)
+                    Text("1. Select Subtitles (Optional):", color = Color.LightGray, fontSize = 14.sp)
+                    Spacer(Modifier.height(8.dp))
+                    
+                    val subOptions = mutableListOf<Triple<String, String, Boolean>>() // DisplayName, Key, isAuto
+                    videoInfo?.subtitles?.forEach { (lang, _) -> subOptions.add(Triple(lang, lang, false)) }
+                    videoInfo?.automaticCaptions?.forEach { (lang, _) -> subOptions.add(Triple("$lang (Auto)", lang, true)) }
+
+                    LazyColumn(modifier = Modifier.heightIn(max = 150.dp)) {
+                        items(subOptions) { option ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { 
+                                        selectedSubtitleKey = if (selectedSubtitleKey == option.second && isAutoSub == option.third) null else option.second
+                                        isAutoSub = option.third
+                                    }
+                                    .padding(vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                RadioButton(
+                                    selected = (selectedSubtitleKey == option.second && isAutoSub == option.third),
+                                    onClick = null
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(option.first, color = Color.White, fontSize = 14.sp)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text("2. Select Quality:", color = Color.LightGray, fontSize = 14.sp)
                     Spacer(modifier = Modifier.height(12.dp))
 
                     val formats = videoInfo?.formats?.filter {
                         (it.vcodec != "none" && it.acodec != "none") || (it.vcodec == "none" && it.acodec != "none")
                     }?.reversed() ?: emptyList()
 
-                    LazyColumn(modifier = Modifier.heightIn(max = 300.dp)) {
+                    LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
                         items(formats) { format ->
                             val isAudioOnly = format.vcodec == "none"
+                            val resolutionText = if (isAudioOnly) "Audio Only" else {
+                                format.height?.let { "${it}p" } ?: format.formatNote ?: "Standard"
+                            }
                             Card(
                                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp).clickable { selectedFormat = format },
                                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
                             ) {
-                                Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(if (isAudioOnly) Icons.Default.Audiotrack else Icons.Default.HighQuality, contentDescription = null)
+                                Row(modifier = Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(if (isAudioOnly) Icons.Default.Audiotrack else Icons.Default.HighQuality, contentDescription = null, modifier = Modifier.size(20.dp))
                                     Spacer(modifier = Modifier.width(12.dp))
                                     Text(
-                                        text = "${format.formatNote ?: "Standard"} - ${format.ext} ${if (isAudioOnly) "(Audio Only)" else ""}",
-                                        fontWeight = FontWeight.Medium, color = Color.White
+                                        text = "$resolutionText - ${format.ext}",
+                                        fontWeight = FontWeight.Medium, color = Color.White, fontSize = 14.sp
                                     )
                                 }
                             }
