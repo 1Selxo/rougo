@@ -18,9 +18,11 @@ import android.provider.OpenableColumns
 import android.util.Size
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -57,7 +59,10 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.core.net.toUri
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -400,6 +405,10 @@ class MainActivity : ComponentActivity() {
     private var sharedUrlState = mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
@@ -621,8 +630,18 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
                     Spacer(Modifier.height(8.dp))
                     
                     val subOptions = mutableListOf<Triple<String, String, Boolean>>() // DisplayName, Key, isAuto
-                    videoInfo?.subtitles?.forEach { (lang, _) -> subOptions.add(Triple(lang, lang, false)) }
-                    videoInfo?.automaticCaptions?.forEach { (lang, _) -> subOptions.add(Triple("$lang (Auto)", lang, true)) }
+                    
+                    try {
+                        val subtitlesField = videoInfo?.javaClass?.getDeclaredField("subtitles")
+                        subtitlesField?.isAccessible = true
+                        val subtitles = subtitlesField?.get(videoInfo) as? Map<String, *>
+                        subtitles?.forEach { (lang, _) -> subOptions.add(Triple(lang, lang, false)) }
+
+                        val autoSubsField = videoInfo?.javaClass?.getDeclaredField("automaticCaptions")
+                        autoSubsField?.isAccessible = true
+                        val autoSubs = autoSubsField?.get(videoInfo) as? Map<String, *>
+                        autoSubs?.forEach { (lang, _) -> subOptions.add(Triple("$lang (Auto)", lang, true)) }
+                    } catch (e: Exception) { e.printStackTrace() }
 
                     LazyColumn(modifier = Modifier.heightIn(max = 150.dp)) {
                         items(subOptions) { option ->
@@ -1014,6 +1033,25 @@ fun PlayerScreen(libraryItem: LibraryItem, onBack: (LibraryItem) -> Unit) {
     var actualMediaUri by remember { mutableStateOf(if (libraryItem.sourceUrl == null) libraryItem.mediaUri else null) }
     var isRefreshingStream by remember { mutableStateOf(libraryItem.sourceUrl != null) }
 
+    val lifecycleOwner = LocalLifecycleOwner.current
+    val libVlc = remember { VLCManager.getLibVLC(context) }
+    val vlcPlayer = remember { VLCMediaPlayer(libVlc) }
+    var videoLayout by remember { mutableStateOf<VLCVideoLayout?>(null) }
+
+    // Recover video surface when returning to foreground
+    DisposableEffect(lifecycleOwner, videoLayout) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (libraryItem.isVideo && videoLayout != null) {
+                    vlcPlayer.detachViews()
+                    vlcPlayer.attachViews(videoLayout!!, null, false, false)
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
     LaunchedEffect(libraryItem) {
         if (libraryItem.sourceUrl != null) {
             isRefreshingStream = true
@@ -1036,10 +1074,7 @@ fun PlayerScreen(libraryItem: LibraryItem, onBack: (LibraryItem) -> Unit) {
     }
 
     // Rely on global VLC Singleton to prevent rapid destruction/instantiation crashes.
-    val libVlc = remember { VLCManager.getLibVLC(context) }
-    val vlcPlayer = remember { VLCMediaPlayer(libVlc) }
-
-    var videoLayout by remember { mutableStateOf<VLCVideoLayout?>(null) }
+    // (Moved initialization up for lifecycle access)
 
     val voiceAudioPlayer = remember {
         AndroidMediaPlayer().apply {
@@ -1162,7 +1197,10 @@ fun PlayerScreen(libraryItem: LibraryItem, onBack: (LibraryItem) -> Unit) {
                 }
             }
 
+            // Ensure we detach any existing view before attaching the new one to prevent 
+            // "Can't set view when already attached" native errors.
             if (libraryItem.isVideo && videoLayout != null) {
+                vlcPlayer.detachViews()
                 vlcPlayer.attachViews(videoLayout!!, null, false, false)
             }
 
@@ -1171,7 +1209,9 @@ fun PlayerScreen(libraryItem: LibraryItem, onBack: (LibraryItem) -> Unit) {
 
         } catch (e: Exception) {
             e.printStackTrace()
-            Toast.makeText(context, "Playback Initialization Error", Toast.LENGTH_SHORT).show()
+            CoroutineScope(Dispatchers.Main).launch {
+                Toast.makeText(context, "Playback Initialization Error: ${e.localizedMessage}", Toast.LENGTH_LONG).show()
+            }
         }
 
         onDispose {
@@ -1353,7 +1393,10 @@ fun PlayerScreen(libraryItem: LibraryItem, onBack: (LibraryItem) -> Unit) {
                             }
                         },
                         modifier = Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = if (isRecording) Color(0xFFE53935) else Color(0xFF383842)),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = if (isRecording) Color(0xFFE53935) else MaterialTheme.colorScheme.primary,
+                            contentColor = if (isRecording) Color.White else Color.Black
+                        ),
                         enabled = !isRefreshingStream
                     ) {
                         Icon(if (isRecording) Icons.Default.Stop else Icons.Default.Mic, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1770,20 +1813,32 @@ fun DictGroupCard(entries: List<DictEntry>) {
 }
 
 @Composable
-fun AudioWaveformComparison(originalAmplitudes: List<Float>, recordedAmplitudes: List<Float>, modifier: Modifier = Modifier) {
+fun AudioWaveformComparison(
+    originalAmplitudes: List<Float>,
+    recordedAmplitudes: List<Float>,
+    onPlayOriginal: () -> Unit,
+    onPlayVoice: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     Column(modifier = modifier.fillMaxWidth().background(Color(0xFF1E1E24), RoundedCornerShape(8.dp)).padding(8.dp)) {
         // Original Audio Waveform (Blue)
-        WaveformTrack(amplitudes = originalAmplitudes, color = Color(0xFF5E5CE6), label = "Original")
+        WaveformTrack(amplitudes = originalAmplitudes, color = Color(0xFF5E5CE6), label = "Original", onClick = onPlayOriginal)
         Spacer(Modifier.height(8.dp))
         // Recorded Audio Waveform (Gray)
-        WaveformTrack(amplitudes = recordedAmplitudes, color = Color(0xFF8E8E93), label = "Recorded")
+        WaveformTrack(amplitudes = recordedAmplitudes, color = Color(0xFF8E8E93), label = "Recorded", onClick = onPlayVoice)
     }
 }
 
 @Composable
-fun WaveformTrack(amplitudes: List<Float>, color: Color, label: String) {
+fun WaveformTrack(amplitudes: List<Float>, color: Color, label: String, onClick: () -> Unit) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.height(48.dp)) {
-        Box(modifier = Modifier.size(32.dp).background(color, CircleShape), contentAlignment = Alignment.Center) {
+        Box(
+            modifier = Modifier
+                .size(32.dp)
+                .background(color, CircleShape)
+                .clickable { onClick() },
+            contentAlignment = Alignment.Center
+        ) {
             Icon(Icons.Default.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(16.dp))
         }
         Spacer(Modifier.width(8.dp))
@@ -1871,14 +1926,24 @@ fun RecordingItemCard(rec: ShadowRecording, onPlayOriginal: () -> Unit, onPlayVo
             
             AudioWaveformComparison(
                 originalAmplitudes = originalAmplitudes,
-                recordedAmplitudes = recordedAmplitudes
+                recordedAmplitudes = recordedAmplitudes,
+                onPlayOriginal = onPlayOriginal,
+                onPlayVoice = onPlayVoice
             )
             
             Spacer(modifier = Modifier.height(12.dp))
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = onPlayOriginal, modifier = Modifier.weight(1f), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White)) { Text("Play Original", fontSize = 12.sp) }
-                Button(onClick = onPlayVoice, modifier = Modifier.weight(1f), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF4CAF50))) { Text("Play My Voice", fontSize = 12.sp) }
+            Button(
+                onClick = {
+                    onPlayOriginal()
+                    onPlayVoice()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary, contentColor = Color.Black)
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(Modifier.width(8.dp))
+                Text("Play Both", fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
         }
     }
