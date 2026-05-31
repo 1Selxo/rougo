@@ -2372,6 +2372,12 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
         val format = extractor.getTrackFormat(audioTrackIndex)
         val mime = format.getString(android.media.MediaFormat.KEY_MIME)!!
         val sampleRate = format.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
+        
+        // SAFELY EXTRACT CHANNEL COUNT (Default to 1 if missing)
+        val channelCount = if (format.containsKey(android.media.MediaFormat.KEY_CHANNEL_COUNT)) {
+            format.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+        } else 1
+        
         val codec = android.media.MediaCodec.createDecoderByType(mime)
         codec.configure(format, null, null, 0)
         codec.start()
@@ -2425,7 +2431,7 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
                         
                         var localMax = 0
                         for (sample in samples) {
-                            val abs = Math.abs(sample.toInt())
+                            val abs = kotlin.math.abs(sample.toInt())
                             if (abs > localMax) localMax = abs
                         }
 
@@ -2433,8 +2439,8 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
                             bucketAmps[bucketIdx] = localMax.toFloat()
                             if (localMax > maxGlobalAmp) maxGlobalAmp = localMax.toFloat()
                             
-                            // Estimate Pitch for this bucket
-                            val pitch = estimatePitch(samples, sampleRate)
+                            // PASS CHANNEL COUNT TO PITCH ESTIMATOR
+                            val pitch = estimatePitch(samples, sampleRate, channelCount)
                             if (pitch != null) bucketPitches[bucketIdx] = pitch
                         }
                     }
@@ -2458,8 +2464,19 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
     return Pair(resultAmps, resultPitches)
 }
 
-fun estimatePitch(samples: ShortArray, sampleRate: Int): Float? {
+fun estimatePitch(samples: ShortArray, sampleRate: Int, channels: Int = 1): Float? {
     if (samples.isEmpty()) return null
+    
+    // De-interleave Stereo to Mono (take every Nth sample)
+    val monoSamples = if (channels > 1) {
+        val mono = ShortArray(samples.size / channels)
+        for (i in mono.indices) {
+            mono[i] = samples[i * channels]
+        }
+        mono
+    } else {
+        samples
+    }
     
     val minPitch = 70   
     val maxPitch = 500  
@@ -2467,17 +2484,17 @@ fun estimatePitch(samples: ShortArray, sampleRate: Int): Float? {
     val maxPeriod = sampleRate / minPitch
     val minPeriod = sampleRate / maxPitch
     
-    if (samples.size < maxPeriod) return null
+    if (monoSamples.size < maxPeriod) return null
     
     var minDiff = Float.MAX_VALUE
     var bestPeriod = -1
     
     for (period in minPeriod..maxPeriod) {
         var diff = 0f
-        for (i in 0 until samples.size - period) {
-            diff += Math.abs(samples[i].toInt() - samples[i + period].toInt())
+        for (i in 0 until monoSamples.size - period) {
+            diff += kotlin.math.abs(monoSamples[i].toInt() - monoSamples[i + period].toInt())
         }
-        diff /= (samples.size - period)
+        diff /= (monoSamples.size - period)
         
         if (diff < minDiff) {
             minDiff = diff
@@ -2485,7 +2502,14 @@ fun estimatePitch(samples: ShortArray, sampleRate: Int): Float? {
         }
     }
     
-    val rms = Math.sqrt(samples.map { (it.toInt() * it.toInt()).toDouble() }.average()).toFloat()
+    // CALCULATE RMS USING PRIMITIVES (DO NOT USE .map {})
+    var sumSq = 0.0
+    for (s in monoSamples) {
+        val v = s.toDouble()
+        sumSq += v * v
+    }
+    val rms = Math.sqrt(sumSq / monoSamples.size).toFloat()
+
     if (rms < 500f) return null 
     
     return if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else null
