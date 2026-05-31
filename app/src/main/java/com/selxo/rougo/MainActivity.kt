@@ -1870,7 +1870,7 @@ fun PitchDiagram(reading: String, pitchPosition: Int, modifier: Modifier = Modif
     val textColor = Color.White
     val dotRadius = 4.dp
     val strokeWidth = 2.dp
-    val moraWidth = 24.dp
+    val moraWidth = 32.dp // Increased from 24.dp to prevent wrapping for morae like "しゅ"
 
     Column(modifier = modifier, horizontalAlignment = Alignment.Start) {
         androidx.compose.foundation.Canvas(
@@ -1926,7 +1926,15 @@ fun PitchDiagram(reading: String, pitchPosition: Int, modifier: Modifier = Modif
 
         Row(modifier = Modifier.width(moraWidth * (morae.size + 1))) {
             morae.forEach { mora ->
-                Text(mora, fontSize = 12.sp, color = textColor, textAlign = TextAlign.Center, modifier = Modifier.width(moraWidth))
+                Text(
+                    text = mora,
+                    fontSize = 12.sp,
+                    color = textColor,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.width(moraWidth),
+                    maxLines = 1,
+                    softWrap = false
+                )
             }
             Spacer(Modifier.width(moraWidth))
         }
