@@ -1035,7 +1035,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigateToDictionaries: () -> Unit) {
                     Spacer(Modifier.width(16.dp))
                     Column {
                         Text("Version", fontWeight = FontWeight.Bold, color = Color.White)
-                        Text("1.0.2 (Rougo Reader)", color = Color.Gray, fontSize = 12.sp)
+                        Text("1.2.0 (Rougo Reader)", color = Color.Gray, fontSize = 12.sp)
                     }
                 }
             }
@@ -1703,7 +1703,6 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             onPlayBoth = { activeBothSegment = latest },
                             onDelete = {
                                 try { File(latest.filePath).delete() } catch (e: Exception) {}
-                                try { File(context.cacheDir, "orig_${latest.id}.m4a").delete() } catch (e: Exception) {}
                                 recordings.remove(latest)
                                 syncWithStorage()
                             },
@@ -1757,7 +1756,6 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             onPlayBoth = { activeBothSegment = rec },
                             onDelete = {
                                 try { File(rec.filePath).delete() } catch (e: Exception) {}
-                                try { File(context.cacheDir, "orig_${rec.id}.m4a").delete() } catch (e: Exception) {}
                                 recordings.remove(rec)
                                 syncWithStorage()
                             },
@@ -2279,12 +2277,13 @@ fun RecordingItemCard(
 
     LaunchedEffect(rec, originalMediaUri) {
         withContext(Dispatchers.IO) {
-            // Real extraction without local caching of segment (MediaExtractor handles remote streaming)
+            // Real extraction without local caching of segment
             val originalData = extractAudioData(context, Uri.parse(originalMediaUri), rec.startTime, rec.endTime, 40)
             originalAmplitudes = originalData.first
             originalPitches = originalData.second
 
-            val recordedData = extractAudioData(context, Uri.fromFile(File(rec.filePath)), 0, rec.endTime - rec.startTime, 40)
+            // Pass 0 for endTimeMs to ensure the entire user recording is fully extracted
+            val recordedData = extractAudioData(context, Uri.fromFile(File(rec.filePath)), 0, 0, 40)
             recordedAmplitudes = recordedData.first
             recordedPitches = recordedData.second
         }
@@ -2344,6 +2343,9 @@ fun RecordingItemCard(
 fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: Long, buckets: Int): Pair<List<Float>, List<Float?>> {
     val resultAmps = MutableList(buckets) { 0.05f }
     val resultPitches = MutableList<Float?>(buckets) { null }
+    var pcmDataBytes: ByteArray? = null
+    var finalSampleRate = 44100
+    var finalChannelCount = 1
 
     try {
         val extractor = android.media.MediaExtractor()
@@ -2353,6 +2355,8 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
             }
         } else if (uri.scheme == "file") {
             extractor.setDataSource(uri.path!!)
+        } else if (uri.scheme?.startsWith("http") == true) {
+            extractor.setDataSource(uri.toString(), mapOf("User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"))
         } else {
             extractor.setDataSource(context, uri, null)
         }
@@ -2367,84 +2371,154 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
             }
         }
 
-        if (audioTrackIndex < 0) {
-            extractor.release()
-            return Pair(resultAmps, resultPitches)
-        }
+        if (audioTrackIndex >= 0) {
+            extractor.selectTrack(audioTrackIndex)
+            val format = extractor.getTrackFormat(audioTrackIndex)
+            val mime = format.getString(android.media.MediaFormat.KEY_MIME)!!
+            finalSampleRate = format.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
+            finalChannelCount = if (format.containsKey(android.media.MediaFormat.KEY_CHANNEL_COUNT)) {
+                format.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+            } else 1
 
-        extractor.selectTrack(audioTrackIndex)
-        val format = extractor.getTrackFormat(audioTrackIndex)
-        val mime = format.getString(android.media.MediaFormat.KEY_MIME)!!
-        val sampleRate = format.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
-        val channelCount = if (format.containsKey(android.media.MediaFormat.KEY_CHANNEL_COUNT)) {
-            format.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
-        } else 1
+            val codec = android.media.MediaCodec.createDecoderByType(mime)
+            codec.configure(format, null, null, 0)
+            codec.start()
 
-        val codec = android.media.MediaCodec.createDecoderByType(mime)
-        codec.configure(format, null, null, 0)
-        codec.start()
+            val startUs = startTimeMs * 1000L
+            val endUs = endTimeMs * 1000L
 
-        val startUs = startTimeMs * 1000L
-        val endUs = endTimeMs * 1000L
-
-        if (startUs > 0) {
-            extractor.seekTo(startUs, android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-        }
-
-        val info = android.media.MediaCodec.BufferInfo()
-        var isEOS = false
-        val pcmData = ByteArrayOutputStream()
-
-        while (!isEOS) {
-            val inIndex = codec.dequeueInputBuffer(10000)
-            if (inIndex >= 0) {
-                val buffer = codec.getInputBuffer(inIndex)!!
-                val sampleSize = extractor.readSampleData(buffer, 0)
-                val sampleTimeUs = extractor.sampleTime
-
-                if (sampleSize < 0 || (endUs > 0 && sampleTimeUs > endUs)) {
-                    codec.queueInputBuffer(inIndex, 0, 0, 0, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                    isEOS = true
-                } else {
-                    codec.queueInputBuffer(inIndex, 0, sampleSize, sampleTimeUs, 0)
-                    extractor.advance()
-                }
+            if (startUs > 0) {
+                extractor.seekTo(startUs, android.media.MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
             }
 
-            var outIndex = codec.dequeueOutputBuffer(info, 10000)
-            while (outIndex >= 0) {
-                if (info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                    isEOS = true
-                }
-                if (info.size > 0) {
-                    if (info.presentationTimeUs >= startUs && (endUs == 0L || info.presentationTimeUs <= endUs)) {
-                        val outBuffer = codec.getOutputBuffer(outIndex)!!
-                        outBuffer.position(info.offset)
-                        outBuffer.limit(info.offset + info.size)
-                        val chunk = ByteArray(info.size)
-                        outBuffer.get(chunk)
-                        pcmData.write(chunk)
+            val info = android.media.MediaCodec.BufferInfo()
+            var inputEOS = false
+            var outputEOS = false
+            val pcmData = ByteArrayOutputStream()
+
+            // Corrected drain loop: ensure output continues draining even after input hits bounds
+            while (!outputEOS) {
+                if (!inputEOS) {
+                    val inIndex = codec.dequeueInputBuffer(10000)
+                    if (inIndex >= 0) {
+                        val buffer = codec.getInputBuffer(inIndex)!!
+                        val sampleSize = extractor.readSampleData(buffer, 0)
+                        val sampleTimeUs = extractor.sampleTime
+
+                        if (sampleSize < 0 || (endUs > 0 && sampleTimeUs > endUs)) {
+                            codec.queueInputBuffer(inIndex, 0, 0, 0, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputEOS = true
+                        } else {
+                            codec.queueInputBuffer(inIndex, 0, sampleSize, sampleTimeUs, 0)
+                            extractor.advance()
+                        }
                     }
                 }
-                codec.releaseOutputBuffer(outIndex, false)
-                outIndex = codec.dequeueOutputBuffer(info, 10000)
-            }
-        }
 
-        codec.stop()
-        codec.release()
+                var outIndex = codec.dequeueOutputBuffer(info, 10000)
+                while (outIndex != android.media.MediaCodec.INFO_TRY_AGAIN_LATER) {
+                    if (outIndex >= 0) {
+                        if ((info.flags and android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                            outputEOS = true
+                        }
+                        if (info.size > 0 && info.presentationTimeUs >= startUs) {
+                            if (endUs == 0L || info.presentationTimeUs <= endUs + 100000L) { // Added brief tolerance
+                                val outBuffer = codec.getOutputBuffer(outIndex)!!
+                                outBuffer.position(info.offset)
+                                outBuffer.limit(info.offset + info.size)
+                                val chunk = ByteArray(info.size)
+                                outBuffer.get(chunk)
+                                pcmData.write(chunk)
+                            }
+                        }
+                        codec.releaseOutputBuffer(outIndex, false)
+                        if (outputEOS) break
+                    } else if (outIndex == android.media.MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                        val newFormat = codec.outputFormat
+                        if (newFormat.containsKey(android.media.MediaFormat.KEY_SAMPLE_RATE)) {
+                            finalSampleRate = newFormat.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
+                        }
+                        if (newFormat.containsKey(android.media.MediaFormat.KEY_CHANNEL_COUNT)) {
+                            finalChannelCount = newFormat.getInteger(android.media.MediaFormat.KEY_CHANNEL_COUNT)
+                        }
+                    }
+                    outIndex = codec.dequeueOutputBuffer(info, 10000)
+                }
+            }
+
+            codec.stop()
+            codec.release()
+            pcmDataBytes = pcmData.toByteArray()
+        }
         extractor.release()
 
-        val byteData = pcmData.toByteArray()
-        if (byteData.isEmpty()) return Pair(resultAmps, resultPitches)
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
 
-        val shortBuffer = ByteBuffer.wrap(byteData).order(ByteOrder.nativeOrder()).asShortBuffer()
+    // FFmpeg Fallback: Ensure remote or complex original videos are extracted successfully if MediaExtractor fails.
+    if ((pcmDataBytes == null || pcmDataBytes!!.isEmpty()) && (uri.scheme?.startsWith("http") == true || uri.scheme == "file")) {
+        try {
+            val tempWav = File(context.cacheDir, "temp_extract_${System.currentTimeMillis()}.wav")
+            val startSec = startTimeMs / 1000.0
+
+            val urlStr = if (uri.scheme == "file") uri.path!! else uri.toString()
+            val cmd = mutableListOf(
+                "-ss", startSec.toString(),
+                "-i", urlStr
+            )
+
+            if (endTimeMs > 0) {
+                val durationSec = (endTimeMs - startTimeMs) / 1000.0
+                cmd.add("-t")
+                cmd.add(durationSec.toString())
+            }
+
+            cmd.addAll(listOf(
+                "-vn",
+                "-acodec", "pcm_s16le",
+                "-ar", "44100",
+                "-ac", "1",
+                "-f", "wav",
+                "-y",
+                tempWav.absolutePath
+            ))
+
+            // Use YoutubeDL.getInstance().execute for FFmpeg commands too, as it routes through the same binary
+            val request = YoutubeDLRequest("").apply {
+                addCommands(cmd)
+            }
+            val response = YoutubeDL.getInstance().execute(request)
+            val rc = response.exitCode
+            if (rc == 0 && tempWav.exists()) {
+                val bytes = tempWav.readBytes()
+                // Skip the 44-byte WAV header
+                if (bytes.size > 44) {
+                    pcmDataBytes = bytes.copyOfRange(44, bytes.size)
+                    finalSampleRate = 44100
+                    finalChannelCount = 1
+                }
+            }
+            try { tempWav.delete() } catch (e: Exception) {}
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    val finalPcm = pcmDataBytes
+    if (finalPcm == null || finalPcm.isEmpty()) {
+        return Pair(resultAmps, resultPitches)
+    }
+
+    try {
+        // Enforce safe endian conversion for output compatibility 
+        val shortBuffer = ByteBuffer.wrap(finalPcm).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
         val allSamples = ShortArray(shortBuffer.remaining())
         shortBuffer.get(allSamples)
 
-        val monoSamples = if (channelCount > 1) {
-            val mono = ShortArray(allSamples.size / channelCount)
-            for (i in mono.indices) mono[i] = allSamples[i * channelCount]
+        val monoSamples = if (finalChannelCount > 1) {
+            val mono = ShortArray(allSamples.size / finalChannelCount)
+            for (i in mono.indices) mono[i] = allSamples[i * finalChannelCount]
             mono
         } else allSamples
 
@@ -2470,7 +2544,7 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
             if (rms > maxGlobalAmp) maxGlobalAmp = rms
 
             val bucketSamples = monoSamples.copyOfRange(startIndex, endIndex)
-            resultPitches[i] = estimatePitch(bucketSamples, sampleRate, 1)
+            resultPitches[i] = estimatePitch(bucketSamples, finalSampleRate, 1)
         }
 
         val smoothedPitches = MutableList<Float?>(buckets) { null }
@@ -2478,7 +2552,8 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
             val window = mutableListOf<Float>()
             for (j in i - 2..i + 2) {
                 if (j in 0 until buckets) {
-                    resultPitches[j]?.let { window.add(it) }
+                    val p = resultPitches[j]
+                    if (p != null) window.add(p)
                 }
             }
             if (window.isNotEmpty()) {
@@ -2491,10 +2566,10 @@ fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: L
             resultAmps[i] = if (maxGlobalAmp > 0) (bucketAmps[i] / maxGlobalAmp).coerceIn(0.05f, 1f) else 0.05f
             resultPitches[i] = smoothedPitches[i]
         }
-
     } catch (e: Exception) {
         e.printStackTrace()
     }
+
     return Pair(resultAmps, resultPitches)
 }
 
@@ -2512,12 +2587,12 @@ fun estimatePitch(samples: ShortArray, sampleRate: Int, channels: Int = 1): Floa
     }
 
     val minPitch = 70
-    val maxPitch = 500
+    val maxPitch = 600
 
     val maxPeriod = sampleRate / minPitch
     val minPeriod = sampleRate / maxPitch
 
-    if (monoSamples.size < maxPeriod) return null
+    if (monoSamples.size <= maxPeriod) return null
 
     var sumSq = 0.0
     for (s in monoSamples) {
@@ -2526,22 +2601,34 @@ fun estimatePitch(samples: ShortArray, sampleRate: Int, channels: Int = 1): Floa
     }
     val rms = Math.sqrt(sumSq / monoSamples.size).toFloat()
 
-    if (rms < 50f) return null
+    if (rms < 30f) return null // Filter absolute silence out early
 
     var minDiff = Float.MAX_VALUE
+    var maxDiff = 0f
     var bestPeriod = -1
+
+    val frameSize = monoSamples.size - maxPeriod
 
     for (period in minPeriod..maxPeriod) {
         var diff = 0f
-        for (i in 0 until monoSamples.size - period) {
+        for (i in 0 until frameSize) {
             diff += kotlin.math.abs(monoSamples[i].toInt() - monoSamples[i + period].toInt())
         }
-        diff /= (monoSamples.size - period)
+        diff /= frameSize
 
         if (diff < minDiff) {
             minDiff = diff
             bestPeriod = period
         }
+        if (diff > maxDiff) {
+            maxDiff = diff
+        }
+    }
+
+    // Crucial Periodicity Check: Ensure we don't output random noise as false pitch.
+    // Deep dips in the difference correlate directly with periodic vocal phonemes.
+    if (maxDiff == 0f || (minDiff / maxDiff) > 0.45f) {
+        return null
     }
 
     return if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else null
