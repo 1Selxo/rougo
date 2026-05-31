@@ -2104,7 +2104,9 @@ fun DictGroupCard(entries: List<DictEntry>) {
 @Composable
 fun AudioWaveformComparison(
     originalAmplitudes: List<Float>,
+    originalPitches: List<Float?>? = null,
     recordedAmplitudes: List<Float>,
+    recordedPitches: List<Float?>? = null,
     onPlayOriginal: () -> Unit,
     onPlayVoice: () -> Unit,
     originalProgress: Float = 0f,
@@ -2112,14 +2114,35 @@ fun AudioWaveformComparison(
     modifier: Modifier = Modifier
 ) {
     Column(modifier = modifier.fillMaxWidth().background(Color(0xFF1E1E24), RoundedCornerShape(8.dp)).padding(8.dp)) {
-        WaveformTrack(amplitudes = originalAmplitudes, color = Color(0xFF5E5CE6), label = "Original", onClick = onPlayOriginal, progress = originalProgress)
+        WaveformTrack(
+            amplitudes = originalAmplitudes,
+            pitches = originalPitches,
+            color = Color(0xFF5E5CE6),
+            label = "Original",
+            onClick = onPlayOriginal,
+            progress = originalProgress
+        )
         Spacer(Modifier.height(8.dp))
-        WaveformTrack(amplitudes = recordedAmplitudes, color = Color(0xFF8E8E93), label = "Recorded", onClick = onPlayVoice, progress = recordedProgress)
+        WaveformTrack(
+            amplitudes = recordedAmplitudes,
+            pitches = recordedPitches,
+            color = Color(0xFF8E8E93),
+            label = "Recorded",
+            onClick = onPlayVoice,
+            progress = recordedProgress
+        )
     }
 }
 
 @Composable
-fun WaveformTrack(amplitudes: List<Float>, color: Color, label: String, onClick: () -> Unit, progress: Float = 0f) {
+fun WaveformTrack(
+    amplitudes: List<Float>,
+    pitches: List<Float?>? = null,
+    color: Color,
+    label: String,
+    onClick: () -> Unit,
+    progress: Float = 0f
+) {
     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.height(48.dp)) {
         Box(
             modifier = Modifier
@@ -2132,9 +2155,10 @@ fun WaveformTrack(amplitudes: List<Float>, color: Color, label: String, onClick:
         }
         Spacer(Modifier.width(8.dp))
         androidx.compose.foundation.Canvas(modifier = Modifier.weight(1f).fillMaxHeight()) {
+            val step = size.width / amplitudes.size
+            val midY = size.height / 2
+
             if (amplitudes.isNotEmpty()) {
-                val step = size.width / amplitudes.size
-                val midY = size.height / 2
                 val points = amplitudes.mapIndexed { index, amp ->
                     androidx.compose.ui.geometry.Offset(index * step, midY - (amp * midY))
                 }
@@ -2147,16 +2171,46 @@ fun WaveformTrack(amplitudes: List<Float>, color: Color, label: String, onClick:
                     }
                 }
                 drawPath(path = path, color = color, style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round))
+            }
 
-                if (progress > 0f) {
-                    val cursorX = size.width * progress.coerceIn(0f, 1f)
-                    drawLine(
-                        color = Color(0xFFAEB2FF), // Use primary theme color for cursor
-                        start = androidx.compose.ui.geometry.Offset(cursorX, 0f),
-                        end = androidx.compose.ui.geometry.Offset(cursorX, size.height),
-                        strokeWidth = 2.dp.toPx()
-                    )
+            // Draw Pitch Contour
+            if (pitches != null && pitches.isNotEmpty()) {
+                val pitchPath = androidx.compose.ui.graphics.Path()
+                var isFirst = true
+                val minHz = 75f
+                val maxHz = 500f
+
+                pitches.forEachIndexed { index, pitchHz ->
+                    if (pitchHz != null && pitchHz in minHz..maxHz) {
+                        val normalizedY = 1f - ((pitchHz - minHz) / (maxHz - minHz)).coerceIn(0f, 1f)
+                        val y = normalizedY * size.height
+                        val x = index * step
+
+                        if (isFirst) {
+                            pitchPath.moveTo(x, y)
+                            isFirst = false
+                        } else {
+                            pitchPath.lineTo(x, y)
+                        }
+                    } else {
+                        isFirst = true
+                    }
                 }
+                drawPath(
+                    path = pitchPath,
+                    color = Color(0xFF00E5FF),
+                    style = androidx.compose.ui.graphics.drawscope.Stroke(width = 2.5.dp.toPx(), cap = androidx.compose.ui.graphics.StrokeCap.Round)
+                )
+            }
+
+            if (progress > 0f) {
+                val cursorX = size.width * progress.coerceIn(0f, 1f)
+                drawLine(
+                    color = Color(0xFFAEB2FF), // Use primary theme color for cursor
+                    start = androidx.compose.ui.geometry.Offset(cursorX, 0f),
+                    end = androidx.compose.ui.geometry.Offset(cursorX, size.height),
+                    strokeWidth = 2.dp.toPx()
+                )
             }
         }
     }
@@ -2213,16 +2267,23 @@ fun RecordingItemCard(
     currentRecordedTime: Long = -1L
 ) {
     var originalAmplitudes by remember { mutableStateOf<List<Float>>(emptyList()) }
+    var originalPitches by remember { mutableStateOf<List<Float?>>(emptyList()) }
     var recordedAmplitudes by remember { mutableStateOf<List<Float>>(emptyList()) }
+    var recordedPitches by remember { mutableStateOf<List<Float?>>(emptyList()) }
 
     LaunchedEffect(rec) {
         withContext(Dispatchers.IO) {
-            if (originalMediaUri.startsWith("http")) {
-                originalAmplitudes = List(40) { (0.1 + Math.random() * 0.7).toFloat() }
+            val originalData = if (originalMediaUri.startsWith("http")) {
+                Pair(List(40) { (0.1 + Math.random() * 0.7).toFloat() }, emptyList<Float?>())
             } else {
-                originalAmplitudes = extractAudioAmplitudes(context, Uri.parse(originalMediaUri), rec.startTime, rec.endTime, 40)
+                extractAudioData(context, Uri.parse(originalMediaUri), rec.startTime, rec.endTime, 40)
             }
-            recordedAmplitudes = extractAudioAmplitudes(context, Uri.fromFile(File(rec.filePath)), 0, rec.endTime - rec.startTime, 40)
+            originalAmplitudes = originalData.first
+            originalPitches = originalData.second
+
+            val recordedData = extractAudioData(context, Uri.fromFile(File(rec.filePath)), 0, rec.endTime - rec.startTime, 40)
+            recordedAmplitudes = recordedData.first
+            recordedPitches = recordedData.second
         }
     }
 
@@ -2253,7 +2314,9 @@ fun RecordingItemCard(
 
             AudioWaveformComparison(
                 originalAmplitudes = originalAmplitudes,
+                originalPitches = originalPitches,
                 recordedAmplitudes = recordedAmplitudes,
+                recordedPitches = recordedPitches,
                 onPlayOriginal = onPlayOriginal,
                 onPlayVoice = onPlayVoice,
                 originalProgress = originalProgress,
@@ -2275,8 +2338,10 @@ fun RecordingItemCard(
     }
 }
 
-fun extractAudioAmplitudes(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: Long, buckets: Int): List<Float> {
-    val result = MutableList(buckets) { 0.05f }
+fun extractAudioData(context: Context, uri: Uri, startTimeMs: Long, endTimeMs: Long, buckets: Int): Pair<List<Float>, List<Float?>> {
+    val resultAmps = MutableList(buckets) { 0.05f }
+    val resultPitches = MutableList<Float?>(buckets) { null }
+    
     try {
         val extractor = android.media.MediaExtractor()
         if (uri.scheme == "content") {
@@ -2300,12 +2365,13 @@ fun extractAudioAmplitudes(context: Context, uri: Uri, startTimeMs: Long, endTim
         }
         if (audioTrackIndex < 0) {
             extractor.release()
-            return result
+            return Pair(resultAmps, resultPitches)
         }
 
         extractor.selectTrack(audioTrackIndex)
         val format = extractor.getTrackFormat(audioTrackIndex)
         val mime = format.getString(android.media.MediaFormat.KEY_MIME)!!
+        val sampleRate = format.getInteger(android.media.MediaFormat.KEY_SAMPLE_RATE)
         val codec = android.media.MediaCodec.createDecoderByType(mime)
         codec.configure(format, null, null, 0)
         codec.start()
@@ -2319,6 +2385,7 @@ fun extractAudioAmplitudes(context: Context, uri: Uri, startTimeMs: Long, endTim
 
         val bucketDurationUs = (durationMs * 1000) / buckets
         val bucketAmps = FloatArray(buckets)
+        val bucketPitches = MutableList<Float?>(buckets) { null }
 
         val info = android.media.MediaCodec.BufferInfo()
         var isEOS = false
@@ -2353,15 +2420,22 @@ fun extractAudioAmplitudes(context: Context, uri: Uri, startTimeMs: Long, endTim
                         outBuffer.limit(info.offset + info.size)
 
                         val shortBuffer = outBuffer.asShortBuffer()
+                        val samples = ShortArray(shortBuffer.remaining())
+                        shortBuffer.get(samples)
+                        
                         var localMax = 0
-                        while (shortBuffer.hasRemaining()) {
-                            val sample = Math.abs(shortBuffer.get().toInt())
-                            if (sample > localMax) localMax = sample
+                        for (sample in samples) {
+                            val abs = Math.abs(sample.toInt())
+                            if (abs > localMax) localMax = abs
                         }
 
                         if (localMax > bucketAmps[bucketIdx]) {
                             bucketAmps[bucketIdx] = localMax.toFloat()
                             if (localMax > maxGlobalAmp) maxGlobalAmp = localMax.toFloat()
+                            
+                            // Estimate Pitch for this bucket
+                            val pitch = estimatePitch(samples, sampleRate)
+                            if (pitch != null) bucketPitches[bucketIdx] = pitch
                         }
                     }
                 }
@@ -2375,12 +2449,46 @@ fun extractAudioAmplitudes(context: Context, uri: Uri, startTimeMs: Long, endTim
         extractor.release()
 
         for (i in 0 until buckets) {
-            result[i] = (bucketAmps[i] / maxGlobalAmp).coerceIn(0.05f, 1f)
+            resultAmps[i] = (bucketAmps[i] / maxGlobalAmp).coerceIn(0.05f, 1f)
+            resultPitches[i] = bucketPitches[i]
         }
     } catch (e: Exception) {
         e.printStackTrace()
     }
-    return result
+    return Pair(resultAmps, resultPitches)
+}
+
+fun estimatePitch(samples: ShortArray, sampleRate: Int): Float? {
+    if (samples.isEmpty()) return null
+    
+    val minPitch = 70   
+    val maxPitch = 500  
+    
+    val maxPeriod = sampleRate / minPitch
+    val minPeriod = sampleRate / maxPitch
+    
+    if (samples.size < maxPeriod) return null
+    
+    var minDiff = Float.MAX_VALUE
+    var bestPeriod = -1
+    
+    for (period in minPeriod..maxPeriod) {
+        var diff = 0f
+        for (i in 0 until samples.size - period) {
+            diff += Math.abs(samples[i].toInt() - samples[i + period].toInt())
+        }
+        diff /= (samples.size - period)
+        
+        if (diff < minDiff) {
+            minDiff = diff
+            bestPeriod = period
+        }
+    }
+    
+    val rms = Math.sqrt(samples.map { (it.toInt() * it.toInt()).toDouble() }.average()).toFloat()
+    if (rms < 500f) return null 
+    
+    return if (bestPeriod > 0) sampleRate.toFloat() / bestPeriod else null
 }
 
 fun exportRecording(context: Context, file: File) {
