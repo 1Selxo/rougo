@@ -1365,7 +1365,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             } catch (e: Exception) {}
                         }
                     }
-                    VLCMediaPlayer.Event.Paused, VLCMediaPlayer.Event.Stopped -> isPlaying = false
+                    VLCMediaPlayer.Event.Paused, VLCMediaPlayer.Event.Stopped, VLCMediaPlayer.Event.EndReached -> isPlaying = false
                     VLCMediaPlayer.Event.TimeChanged -> {
                         currentPos = event.timeChanged.coerceAtLeast(0)
                     }
@@ -1373,6 +1373,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                         if (event.lengthChanged > 0) duration = event.lengthChanged
                     }
                     VLCMediaPlayer.Event.EncounteredError -> {
+                        isPlaying = false
                         CoroutineScope(Dispatchers.Main).launch {
                             Toast.makeText(context, "Playback failed. Stream might be geo-blocked or broken.", Toast.LENGTH_SHORT).show()
                         }
@@ -1589,7 +1590,16 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
                     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                         IconButton(onClick = { vlcPlayer.time = (currentPos - 5000).coerceAtLeast(0) }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.FastRewind, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp)) }
-                        Box(modifier = Modifier.size(52.dp).clip(CircleShape).background(if (isRefreshingStream) Color.DarkGray else MaterialTheme.colorScheme.primary).clickable(enabled = !isRefreshingStream) { if (isPlaying) vlcPlayer.pause() else vlcPlayer.play() }, contentAlignment = Alignment.Center) {
+                        Box(modifier = Modifier.size(52.dp).clip(CircleShape).background(if (isRefreshingStream) Color.DarkGray else MaterialTheme.colorScheme.primary).clickable(enabled = !isRefreshingStream) { 
+                            if (isPlaying) {
+                                vlcPlayer.pause()
+                            } else {
+                                if (currentPos >= duration - 500L && duration > 0) {
+                                    vlcPlayer.time = 0
+                                }
+                                vlcPlayer.play()
+                            }
+                        }, contentAlignment = Alignment.Center) {
                             Icon(if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = Color.Black, modifier = Modifier.size(28.dp))
                         }
                         IconButton(onClick = { vlcPlayer.time = (currentPos + 5000).coerceAtMost(duration) }, modifier = Modifier.size(44.dp)) { Icon(Icons.Default.FastForward, contentDescription = null, tint = Color.White, modifier = Modifier.size(24.dp)) }
