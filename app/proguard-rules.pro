@@ -25,6 +25,9 @@
 -keep class org.videolan.libvlc.util.** { *; }
 -keep class com.yausername.youtubedl_android.** { *; }
 -keep class com.yausername.ffmpeg.** { *; }
+-keep class org.apache.commons.compress.** { *; }
+-keepclassmembers class org.apache.commons.compress.** { *; }
+-dontwarn org.apache.commons.compress.**
 
 # Launcher/crash-reporting entry points must keep their manifest names in release builds.
 -keep class com.selxo.rougo.RougoApplication { *; }

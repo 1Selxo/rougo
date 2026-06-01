@@ -52,6 +52,7 @@ jobs:
             - Loads embedded audiobook metadata for local media.
             - Extracts and caches embedded M4B cover art, including attached-picture streams.
             - Adds startup crash reporting and hardens launcher entry points.
+            - Keeps media-tool runtime classes intact in release builds.
             - Shows the installed app name as 朗語.
             - Keeps the app-visible version at V2.
         env:

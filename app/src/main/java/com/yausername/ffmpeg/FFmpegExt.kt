@@ -44,8 +44,8 @@ fun FFmpeg.execute(commands: Array<String>): Int {
         val exitCode = process.waitFor()
         outputDrain.join(1000)
         exitCode
-    } catch (e: Exception) {
-        e.printStackTrace()
+    } catch (t: Throwable) {
+        t.printStackTrace()
         -1
     }
 }
