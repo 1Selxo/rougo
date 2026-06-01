@@ -53,6 +53,8 @@ jobs:
             - Extracts and caches embedded M4B cover art, including attached-picture streams.
             - Adds startup crash reporting and hardens launcher entry points.
             - Keeps media-tool runtime classes intact in release builds.
+            - Prevents long-stream waveform OOM crashes and rejects zero-length shadowing segments.
+            - Adds in-app video link streaming/downloading, subtitle language defaults, theme modes, accents, and onboarding.
             - Shows the installed app name as 朗語.
             - Keeps the app-visible version at V2.
         env:
