@@ -65,5 +65,5 @@ GitHub Actions builds release APKs from version tags such as `V2.4`. The publish
 ## License
 
 This project is licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE) for details.
-##
-I will always be thankful for Manhhao for giving me a chance to be able to make this app a reality
+## I will always be thankful for Manhhao for giving me a chance to be able to make this app a reality
+pull requests and help with the app is always appreciated
