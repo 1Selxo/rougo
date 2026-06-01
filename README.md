@@ -2,7 +2,7 @@
 
 朗語 is a native Android app for Japanese shadowing/choursing practice. It combines local media playback, YouTube stream support, subtitle timing controls, dictionary lookup, and voice recording feedback in one focused study app.
 
-[Download V2.2](https://github.com/kaihouguide/rougo/releases/tag/V2.2)
+[Download V2.3](https://github.com/kaihouguide/rougo/releases/tag/V2.3)
 
 ## Screenshots
 
@@ -60,7 +60,7 @@ app/build/outputs/apk/release/
 
 ## Releases
 
-GitHub Actions builds release APKs from version tags such as `V2.2`. The published release includes separate APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
+GitHub Actions builds release APKs from version tags such as `V2.3`. The published release includes separate APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
 
 ## License
 

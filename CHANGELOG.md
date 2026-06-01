@@ -1,5 +1,15 @@
 # Changelog
 
+## V2.3 - 2026-06-01
+
+- Fixed light mode system bars so status/navigation icons switch to dark.
+- Routed Bilibili and Niconico links through stream setup instead of opening raw page URLs.
+- Downloads Bilibili and Niconico imports to a local playable file before opening them.
+- Preserved stream HTTP headers for VLC playback when a site requires user-agent or referrer headers.
+- Tightened Play Both startup so the original video/audio is started before the recorded voice.
+- Changed stream download actions to show loading, then an encircled checkmark after completion.
+- Updated stream labels so Bilibili/Niconico items no longer appear as generic YouTube cards.
+
 ## V2.2 - 2026-06-01
 
 - Fixed Play Both state so the original and recorded waveform controls both switch to pause while the paired segment is active.

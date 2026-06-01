@@ -86,9 +86,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -247,7 +249,8 @@ data class LibraryItem(
     var recordings: List<ShadowRecording> = emptyList(),
     val sourceUrl: String? = null, val formatId: String? = null,
     val artist: String? = null, val album: String? = null, val albumArtist: String? = null,
-    val genre: String? = null, val year: String? = null, val coverArtPath: String? = null
+    val genre: String? = null, val year: String? = null, val coverArtPath: String? = null,
+    val httpUserAgent: String? = null, val httpReferer: String? = null
 )
 
 data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
@@ -859,7 +862,9 @@ class LibraryManager(context: Context) {
                         albumArtist = obj.optCleanString("albumArtist"),
                         genre = obj.optCleanString("genre"),
                         year = obj.optCleanString("year"),
-                        coverArtPath = obj.optCleanString("coverArtPath")
+                        coverArtPath = obj.optCleanString("coverArtPath"),
+                        httpUserAgent = obj.optCleanString("httpUserAgent"),
+                        httpReferer = obj.optCleanString("httpReferer")
                     )
                 )
             } catch (e: Exception) {
@@ -899,6 +904,7 @@ class LibraryManager(context: Context) {
         obj.put("artist", item.artist ?: ""); obj.put("album", item.album ?: "")
         obj.put("albumArtist", item.albumArtist ?: ""); obj.put("genre", item.genre ?: "")
         obj.put("year", item.year ?: ""); obj.put("coverArtPath", item.coverArtPath ?: "")
+        obj.put("httpUserAgent", item.httpUserAgent ?: ""); obj.put("httpReferer", item.httpReferer ?: "")
 
         val recArray = JSONArray()
         item.recordings.forEach { rec ->
@@ -938,11 +944,14 @@ private data class YoutubeSetupData(
     val fallbackUrl: String?,
     val formats: List<YoutubeStreamFormat>,
     val subtitleChoices: List<YoutubeSubtitleChoice>,
-    val thumbnailUrl: String? = null
+    val thumbnailUrl: String? = null,
+    val httpUserAgent: String? = null,
+    val httpReferer: String? = null
 )
 
 private data class YoutubeResolutionOption(val key: String, val label: String)
 private data class AccentOption(val key: String, val label: String, val darkColor: Color, val lightColor: Color)
+enum class LibraryDownloadState { Idle, Loading, Complete }
 
 private const val PREF_YOUTUBE_RESOLUTION = "youtube_preferred_resolution"
 private const val PREF_YOUTUBE_AUTO_SUBTITLES = "youtube_auto_subtitles"
@@ -1231,6 +1240,23 @@ class MainActivity : ComponentActivity() {
             }
             var accentColor by remember { mutableStateOf(prefs.getString(PREF_ACCENT_COLOR, "purple") ?: "purple") }
             val systemDark = isSystemInDarkTheme()
+            val usesDarkSystemBars = themeMode == THEME_DARK || themeMode == THEME_BLACK || (themeMode == THEME_SYSTEM && systemDark)
+            val systemBarStyle = if (usesDarkSystemBars) {
+                SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+            } else {
+                SystemBarStyle.light(android.graphics.Color.TRANSPARENT, android.graphics.Color.TRANSPARENT)
+            }
+
+            SideEffect {
+                enableEdgeToEdge(
+                    statusBarStyle = systemBarStyle,
+                    navigationBarStyle = systemBarStyle
+                )
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !usesDarkSystemBars
+                    isAppearanceLightNavigationBars = !usesDarkSystemBars
+                }
+            }
 
             MaterialTheme(colorScheme = rougoColorScheme(themeMode, accentColor, systemDark)) {
                 Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -1457,16 +1483,7 @@ fun MainAppFlow(
     var manualVideoUrl by remember { mutableStateOf<String?>(null) }
 
     val pendingVideoUrl = sharedUrl ?: manualVideoUrl
-    if (pendingVideoUrl != null && isNativeDirectWebPlaybackUrl(pendingVideoUrl)) {
-        LaunchedEffect(pendingVideoUrl) {
-            val newItem = createDirectWebLibraryItem(pendingVideoUrl)
-            libraryManager.saveItem(newItem)
-            libraryItems = libraryManager.getItems()
-            if (sharedUrl != null) onSharedUrlProcessed() else manualVideoUrl = null
-            activeItem = newItem
-            currentScreen = AppScreen.Player
-        }
-    } else if (pendingVideoUrl != null) {
+    if (pendingVideoUrl != null) {
         YtStreamDialog(
             url = pendingVideoUrl,
             onDismiss = {
@@ -1529,6 +1546,8 @@ fun MainAppFlow(
 fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem) -> Unit) {
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
+    val sourceLabel = remember(url) { streamSourceLabel(url) }
+    val downloadBeforePlayback = remember(url) { isBilibiliUrl(url) || isNiconicoUrl(url) }
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
     val preferredResolution = remember {
         prefs.getString(PREF_YOUTUBE_RESOLUTION, DEFAULT_YOUTUBE_RESOLUTION) ?: DEFAULT_YOUTUBE_RESOLUTION
@@ -1539,7 +1558,7 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
     val preferredSubtitleLanguage = remember {
         prefs.getString(PREF_YOUTUBE_SUBTITLE_LANGUAGE, DEFAULT_YOUTUBE_SUBTITLE_LANGUAGE) ?: DEFAULT_YOUTUBE_SUBTITLE_LANGUAGE
     }
-    var status by remember { mutableStateOf("Fetching video info...") }
+    var status by remember { mutableStateOf("Fetching $sourceLabel stream...") }
     var setupData by remember { mutableStateOf<YoutubeSetupData?>(null) }
     var subtitleChoices by remember { mutableStateOf<List<YoutubeSubtitleChoice>>(emptyList()) }
     var selectedFormat by remember { mutableStateOf<YoutubeStreamFormat?>(null) }
@@ -1554,6 +1573,22 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
             }
             setupData = fetchedSetupData
             subtitleChoices = fetchedSetupData.subtitleChoices
+
+            if (downloadBeforePlayback) {
+                isProcessing = true
+                status = "Downloading $sourceLabel video..."
+                val downloadedItem = withContext(Dispatchers.IO) {
+                    downloadVideoLinkToLibraryItem(context, url)
+                }
+                if (downloadedItem != null) {
+                    onComplete(downloadedItem)
+                } else {
+                    status = "$sourceLabel download failed."
+                    delay(3000)
+                    onDismiss()
+                }
+                return@LaunchedEffect
+            }
 
             if (preferredResolution != YOUTUBE_RESOLUTION_ASK) {
                 val format = selectPreferredYoutubeFormat(fetchedSetupData.formats, preferredResolution)
@@ -1621,7 +1656,7 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
 
     AlertDialog(
         onDismissRequest = { if (!isProcessing && setupData == null) onDismiss() },
-        title = { Text("Stream Setup", fontWeight = FontWeight.Bold) },
+        title = { Text("$sourceLabel Setup", fontWeight = FontWeight.Bold) },
         text = {
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (setupData == null || isProcessing) {
@@ -1636,7 +1671,7 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
                     Spacer(Modifier.height(8.dp))
 
                     if (subtitleChoices.isEmpty()) {
-                        Text("No YouTube subtitles found", color = Color.Gray, fontSize = 13.sp)
+                        Text("No captions found", color = Color.Gray, fontSize = 13.sp)
                     } else {
                         LazyColumn(modifier = Modifier.heightIn(max = 150.dp)) {
                             items(subtitleChoices) { option ->
@@ -1751,29 +1786,16 @@ private fun isNiconicoUrl(url: String): Boolean {
     return host.contains("nicovideo.jp") || host.contains("nico.ms")
 }
 
-private fun isNativeDirectWebPlaybackUrl(url: String): Boolean {
-    return isBilibiliUrl(url) || isNiconicoUrl(url)
-}
-
-private fun createDirectWebLibraryItem(url: String): LibraryItem {
-    val host = runCatching { Uri.parse(url).host.orEmpty().removePrefix("www.") }.getOrDefault("")
-    val title = when {
-        isBilibiliUrl(url) -> "Bilibili Video"
-        isNiconicoUrl(url) -> "Niconico Video"
-        host.isNotBlank() -> host
-        else -> "Web Video"
+private fun streamSourceLabel(url: String?): String {
+    if (url.isNullOrBlank()) return "Video"
+    return when {
+        isYoutubeUrl(url) -> "YouTube"
+        isBilibiliUrl(url) -> "Bilibili"
+        isNiconicoUrl(url) -> "Niconico"
+        else -> runCatching { Uri.parse(url).host.orEmpty().removePrefix("www.") }
+            .getOrDefault("")
+            .ifBlank { "Stream" }
     }
-    return LibraryItem(
-        id = UUID.randomUUID().toString(),
-        title = title,
-        mediaUri = url,
-        subtitleUri = null,
-        progress = 0L,
-        duration = 0L,
-        isVideo = true,
-        sourceUrl = null,
-        formatId = null
-    )
 }
 
 private fun addFastYoutubeOptions(context: Context, request: YoutubeDLRequest, sourceUrl: String, skipDownload: Boolean = true): YoutubeDLRequest {
@@ -1794,14 +1816,28 @@ private fun addFastYoutubeOptions(context: Context, request: YoutubeDLRequest, s
 
 private fun fetchYoutubeSetupData(context: Context, url: String): YoutubeSetupData {
     val json = fetchYoutubeInfoJson(context, url)
+    val headers = parseStreamHttpHeaders(json)
 
     return YoutubeSetupData(
         title = json.optString("title", "YouTube Stream"),
         fallbackUrl = json.optString("url").takeIf { it.isNotBlank() },
         formats = parseYoutubeFormats(json),
         subtitleChoices = parseYoutubeSubtitleChoices(json),
-        thumbnailUrl = bestThumbnailUrl(json)
+        thumbnailUrl = bestThumbnailUrl(json),
+        httpUserAgent = headers.first,
+        httpReferer = headers.second
     )
+}
+
+private fun parseStreamHttpHeaders(json: JSONObject): Pair<String?, String?> {
+    val headers = json.optJSONObject("http_headers")
+    val userAgent = headers?.optCleanString("User-Agent")
+        ?: headers?.optCleanString("user-agent")
+        ?: json.optCleanString("user_agent")
+    val referer = headers?.optCleanString("Referer")
+        ?: headers?.optCleanString("referer")
+        ?: headers?.optCleanString("Referrer")
+    return userAgent to referer
 }
 
 private suspend fun createYoutubeLibraryItem(
@@ -1823,7 +1859,9 @@ private suspend fun createYoutubeLibraryItem(
         isVideo = format.vcodec != "none",
         sourceUrl = sourceUrl,
         formatId = format.formatId,
-        coverArtPath = coverArtPath
+        coverArtPath = coverArtPath,
+        httpUserAgent = setupData?.httpUserAgent,
+        httpReferer = setupData?.httpReferer
     )
 }
 
@@ -2008,7 +2046,6 @@ private fun selectPreferredYoutubeFormat(
 }
 
 private fun resolveYoutubeStreamUrl(context: Context, url: String, formatId: String?): String? {
-    if (isNativeDirectWebPlaybackUrl(url)) return url
     val json = fetchYoutubeInfoJson(context, url)
     val targetFormat = parseYoutubeFormats(json).firstOrNull { it.formatId == formatId }
     return targetFormat?.url ?: targetFormat?.manifestUrl ?: json.optString("url").takeIf { it.isNotBlank() }
@@ -2090,7 +2127,9 @@ private fun downloadVideoLinkToLibraryItem(context: Context, url: String, existi
             recordings = existingItem?.recordings ?: emptyList(),
             coverArtPath = metadata.coverArtPath
                 ?: setupData?.thumbnailUrl?.let { downloadRemoteCover(context, itemId, it) }
-                ?: existingItem?.coverArtPath
+                ?: existingItem?.coverArtPath,
+            httpUserAgent = existingItem?.httpUserAgent ?: setupData?.httpUserAgent,
+            httpReferer = existingItem?.httpReferer ?: setupData?.httpReferer
         )
         mergeMetadataIntoItem(baseItem, metadata, fallbackTitle)
     } catch (t: Throwable) {
@@ -2408,7 +2447,7 @@ fun LibraryScreen(
     var showHelpDialog by remember { mutableStateOf(false) }
     var linkText by remember { mutableStateOf("") }
     var isDownloadingLink by remember { mutableStateOf(false) }
-    var downloadingItemId by remember { mutableStateOf<String?>(null) }
+    val downloadStates = remember { mutableStateMapOf<String, LibraryDownloadState>() }
 
     val filteredItems = remember(items, searchQuery, selectedFilter, sortMode) {
         val query = searchQuery.trim().lowercase(Locale.US)
@@ -2627,27 +2666,29 @@ fun LibraryScreen(
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(filteredItems, key = { it.id }) { item ->
+                        val downloadState = downloadStates[item.id] ?: LibraryDownloadState.Idle
                         LibraryCard(
                             item = item,
                             onClick = { onItemClick(item) },
                             onDelete = { onDelete(item) },
-                            isDownloading = downloadingItemId == item.id,
+                            downloadState = downloadState,
                             onDownload = item.sourceUrl?.let { sourceUrl ->
                                 {
-                                    if (downloadingItemId == null) {
-                                        downloadingItemId = item.id
+                                    if (downloadState != LibraryDownloadState.Loading) {
+                                        downloadStates[item.id] = LibraryDownloadState.Loading
                                         importScope.launch {
                                             val downloadedItem = withContext(Dispatchers.IO) {
                                                 downloadVideoLinkToLibraryItem(context, sourceUrl, item)
                                             }
                                             if (downloadedItem != null) {
                                                 libraryManager.saveItem(downloadedItem)
+                                                downloadStates[item.id] = LibraryDownloadState.Complete
                                                 onRefresh()
                                                 Toast.makeText(context, "Downloaded video.", Toast.LENGTH_SHORT).show()
                                             } else {
+                                                downloadStates.remove(item.id)
                                                 Toast.makeText(context, "Download failed.", Toast.LENGTH_LONG).show()
                                             }
-                                            downloadingItemId = null
                                         }
                                     }
                                 }
@@ -2767,7 +2808,7 @@ fun SettingsScreen(
     val appVersion = remember {
         runCatching {
             context.packageManager.getPackageInfo(context.packageName, 0).versionName
-        }.getOrNull() ?: "V2.2"
+        }.getOrNull() ?: "V2.3"
     }
     val usesDarkSurfaces = when (themeMode) {
         THEME_LIGHT -> false
@@ -3487,6 +3528,39 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         }
     }
 
+    suspend fun prepareVoiceSegment(segment: ShadowRecording, startAtMs: Long = 0L): Boolean {
+        val prepared = CompletableDeferred<Boolean>()
+        return try {
+            voiceAudioPlayer.apply {
+                reset()
+                setDataSource(segment.filePath)
+                setOnPreparedListener {
+                    activeVoiceSegmentId = segment.id
+                    val seekToMs = startAtMs.coerceAtLeast(0L).coerceAtMost((segment.endTime - segment.startTime).coerceAtLeast(0L))
+                    if (seekToMs > 0L) seekTo(seekToMs.toInt())
+                    voiceCurrentPos = seekToMs
+                    if (!prepared.isCompleted) prepared.complete(true)
+                }
+                setOnCompletionListener {
+                    activeVoiceSegmentId = null
+                    voiceCurrentPos = -1L
+                }
+                setOnErrorListener { _, _, _ ->
+                    activeVoiceSegmentId = null
+                    voiceCurrentPos = -1L
+                    if (!prepared.isCompleted) prepared.complete(false)
+                    true
+                }
+                prepareAsync()
+            }
+            withTimeoutOrNull(2500) { prepared.await() } == true
+        } catch (e: Exception) {
+            activeVoiceSegmentId = null
+            voiceCurrentPos = -1L
+            false
+        }
+    }
+
     fun toggleVoiceSegment(segment: ShadowRecording) {
         if (activeVoiceSegmentId == segment.id) {
             if (voiceAudioPlayer.isPlaying) {
@@ -3563,17 +3637,36 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     LaunchedEffect(activeBothSegment) {
         activeBothSegment?.let { segment ->
             try {
-                seekMainPlayer(segment.startTime, resumeAfterSeek = true)
+                try { voiceAudioPlayer.pause() } catch (e: Exception) {}
+                seekMainPlayer(segment.startTime, resumeAfterSeek = false)
 
                 var seekWaitCount = 0
-                while (Math.abs(vlcPlayer.time - segment.startTime) > 1500 && seekWaitCount < 40) {
-                    delay(50)
+                while (Math.abs(vlcPlayer.time - segment.startTime) > 600 && seekWaitCount < 24) {
+                    delay(25)
                     seekWaitCount++
                 }
 
-                playVoiceSegment(segment)
+                if (!prepareVoiceSegment(segment)) {
+                    Toast.makeText(context, "Error playing recorded audio", Toast.LENGTH_SHORT).show()
+                    return@let
+                }
 
-                while (vlcPlayer.time < segment.endTime) { delay(50) }
+                vlcPlayer.time = segment.startTime
+                currentPos = segment.startTime
+                vlcPlayer.play()
+                isPlaying = true
+
+                var playWaitCount = 0
+                while (!vlcPlayer.isPlaying && playWaitCount < 12) {
+                    delay(16)
+                    playWaitCount++
+                }
+                delay(40)
+                if (activeBothSegment?.id == segment.id) {
+                    voiceAudioPlayer.start()
+                }
+
+                while (activeBothSegment?.id == segment.id && vlcPlayer.time < segment.endTime) { delay(25) }
             } finally {
                 vlcPlayer.pause()
                 if (activeVoiceSegmentId == segment.id && voiceAudioPlayer.isPlaying) {
@@ -3637,6 +3730,12 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
             media.addOption(":network-caching=800")
             media.addOption(":file-caching=300")
             media.addOption(":http-reconnect")
+            libraryItem.httpUserAgent?.takeIf { it.isNotBlank() }?.let {
+                media.addOption(":http-user-agent=$it")
+            }
+            libraryItem.httpReferer?.takeIf { it.isNotBlank() }?.let {
+                media.addOption(":http-referrer=$it")
+            }
             vlcPlayer.media = media
             media.release()
 
@@ -4851,14 +4950,14 @@ fun LibraryCard(
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onDownload: (() -> Unit)? = null,
-    isDownloading: Boolean = false
+    downloadState: LibraryDownloadState = LibraryDownloadState.Idle
 ) {
     val context = LocalContext.current
     val progressPct = if (item.duration > 0) (item.progress.toFloat() / item.duration.toFloat()) else 0f
     val albumArt = loadAlbumArt(context, item.mediaUri, item.isVideo, item.coverArtPath)
     val metadataLine = item.metadataSummary()
     val itemType = when {
-        item.sourceUrl != null -> "YouTube"
+        item.sourceUrl != null -> streamSourceLabel(item.sourceUrl)
         item.isVideo -> "Video"
         else -> "Audio"
     }
@@ -4936,16 +5035,22 @@ fun LibraryCard(
                 IconButton(onClick = onDelete, modifier = Modifier.size(44.dp)) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                if (onDownload != null) {
+                if (onDownload != null || downloadState != LibraryDownloadState.Idle) {
                     IconButton(
-                        onClick = onDownload,
-                        enabled = !isDownloading,
+                        onClick = { onDownload?.invoke() },
+                        enabled = onDownload != null && downloadState == LibraryDownloadState.Idle,
                         modifier = Modifier.size(44.dp)
                     ) {
-                        if (isDownloading) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Download, contentDescription = "Download", tint = MaterialTheme.colorScheme.primary)
+                        when (downloadState) {
+                            LibraryDownloadState.Loading -> {
+                                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            }
+                            LibraryDownloadState.Complete -> {
+                                Icon(Icons.Default.CheckCircle, contentDescription = "Downloaded", tint = MaterialTheme.colorScheme.primary)
+                            }
+                            LibraryDownloadState.Idle -> {
+                                Icon(Icons.Default.Download, contentDescription = "Download", tint = MaterialTheme.colorScheme.primary)
+                            }
                         }
                     }
                 }
