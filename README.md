@@ -1,70 +1,67 @@
-# 朗語 (Rougo Reader) 📖
+# 朗語
 
-**朗語 (Rougo)** is a native Android media player specifically designed for Japanese language immersion and shadowing. It combines powerful video/audio playback with a professional-grade dictionary engine and advanced feedback tools to help you master Japanese intonation and listening.
+朗語 is a native Android app for Japanese immersion, audiobook listening, and shadowing practice. It combines local media playback, YouTube stream support, subtitle timing controls, dictionary lookup, and voice recording feedback in one focused study app.
 
----
+[Download V2](https://github.com/kaihouguide/rougo/releases/tag/V2)
 
-## ✨ Key Features
+## Screenshots
 
-### 📚 Integrated Dictionary Engine
-- **Automatic JMdict Setup**: Downloads and imports the latest JMdict English dictionary on first startup.
-- **Deinflected Headwords**: Intelligent lookup that always shows you the dictionary form of a word, no matter how it was conjugated.
-- **Grouped Results**: Consolidates multiple dictionary sources into a single, clean interface.
-- **Structured Content**: Supports full HTML/CSS rendering for complex Yomitan-style glossaries.
-
-### 📈 Professional Pitch Accent Support
-- **Visual Diagrams**: High-fidelity pitch graphs perfectly aligned with every kana character.
-- **Overline Indicators**: Traditional overline and drop-bar displays for quick intonation checks.
-- **Dictionary Source Tagging**: Every pitch entry is tagged with its source dictionary (e.g., NHK, Kanjium).
-
-### 🎤 Advanced Shadowing Tools
-- **Waveform Comparison**: Visually compare your recorded voice against the original audio to perfect your timing and rhythm.
-- **Noise Cancellation**: Toggleable DSP processing optimized for speech capture in noisy environments.
-- **Session Backlog**: Automatically saves and groups your recordings for easy review and progress tracking.
-
-### 📱 Modern User Experience
-- **Optimized Player Layout**: Strict layout management ensuring subtitles and video remain clear even with controls visible.
-- **Customizable Priority**: Reorder your installed dictionaries to set your own search priority.
-- **System Navigation**: Full support for system back gestures and standard Android UI patterns.
-
----
-
-## 📸 Screenshots
-
-| Library | Settings | Manage Dictionaries |
+| Library | Audiobook Player | Shadowing Review |
 |:---:|:---:|:---:|
-| ![Library](media/screenshots/library.png) | ![Settings](media/screenshots/settings.png) | ![Manage](media/screenshots/manage_dicts.png) |
+| <img src="media/screenshots/v2-library.jpg" alt="Library showing local media, YouTube item, audiobook cover art, recordings, subtitles, search, and filters" width="220"> | <img src="media/screenshots/v2-player-cover.jpg" alt="Audiobook player using embedded M4B cover art with playback controls" width="220"> | <img src="media/screenshots/v2-shadowing-waveform.jpg" alt="Shadowing screen with subtitle text, recording controls, and original versus recorded waveform comparison" width="220"> |
 
----
+| Settings: Controls | Settings: Version |
+|:---:|:---:|
+| <img src="media/screenshots/v2-settings-controls.jpg" alt="Settings screen with light mode, dictionaries, noise cancellation, skip buttons, and subtitle offset controls" width="220"> | <img src="media/screenshots/v2-settings-version.jpg" alt="Settings screen with YouTube quality, automatic subtitles, and V2 version information" width="220"> |
 
-## 🚀 Installation
+## Features
 
-1. Go to the [Releases](https://github.com/kaihouguide/rougo/releases) page.
-2. Download the APK corresponding to your device's architecture:
-   - **`arm64-v8a`**: For most modern Android phones.
-   - **`universal`**: If you are unsure which one to pick.
-3. Install the APK on your device.
-4. On first run, the app will automatically set up the JMdict dictionary for you.
+- Local audio and video library with progress tracking, search, filters, and subtitle status.
+- M4B audiobook support with embedded title metadata and cover art extraction.
+- VLC-backed playback for reliable audio/video handling across common media formats.
+- Shadowing mode with recording playback, original audio playback, waveform comparison, and pitch-style visual overlays.
+- Toggleable noise cancellation for cleaner speech recording during shadowing.
+- Subtitle delay controls and configurable skip buttons for fast listening review.
+- YouTube sharing/import with selectable quality and optional automatic subtitle download.
+- Built-in dictionary workflow with JMdict setup and Yomitan-style dictionary import.
+- Crash reporting that saves the last crash details so issues can be diagnosed later.
 
----
+## Installation
 
-## 🛠 Building from Source
+1. Open the [latest release](https://github.com/kaihouguide/rougo/releases/latest).
+2. Download the APK that matches your device architecture.
+   - Most modern Android phones use `app-arm64-v8a-release.apk`.
+   - Android emulators may need `x86` or `x86_64`.
+3. Install the APK on your Android device.
+4. Open 朗語 and add local media, or share a YouTube link into the app.
 
-### Prerequisites
-- Android Studio Ladybug or newer.
-- JDK 17.
-- Android NDK (for native dictionary components).
+## Building
 
-### Steps
-1. Clone the repository:
-   ```bash
-   git clone https://github.com/kaihouguide/rougo.git
-   ```
-2. Open the project in Android Studio.
-3. Sync Project with Gradle Files.
-4. Build and Run.
+### Requirements
 
----
+- Android Studio
+- JDK 21
+- Android SDK 36
+- Android NDK for the native dictionary module
 
-## 📜 License
-This project is licensed under the GNU General Public License v3.0 - see the [LICENSE](LICENSE) file for details.
+### Local Build
+
+```bash
+git clone https://github.com/kaihouguide/rougo.git
+cd rougo
+./gradlew :app:assembleRelease
+```
+
+Release APKs are generated under:
+
+```text
+app/build/outputs/apk/release/
+```
+
+## Releases
+
+GitHub Actions builds release APKs from version tags such as `V2`. The published release includes separate APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
+
+## License
+
+This project is licensed under the GNU General Public License v3.0. See [LICENSE](LICENSE) for details.
