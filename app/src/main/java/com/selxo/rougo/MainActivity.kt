@@ -15,6 +15,7 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
@@ -133,10 +134,54 @@ data class LibraryItem(
     val id: String, val title: String, val mediaUri: String,
     val subtitleUri: String?, var progress: Long, var duration: Long, val isVideo: Boolean,
     var recordings: List<ShadowRecording> = emptyList(),
-    val sourceUrl: String? = null, val formatId: String? = null
+    val sourceUrl: String? = null, val formatId: String? = null,
+    val artist: String? = null, val album: String? = null, val albumArtist: String? = null,
+    val genre: String? = null, val year: String? = null, val coverArtPath: String? = null
 )
 
 data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
+
+private data class MediaMetadataSnapshot(
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val albumArtist: String? = null,
+    val genre: String? = null,
+    val year: String? = null,
+    val durationMs: Long? = null,
+    val coverArtPath: String? = null
+)
+
+private fun JSONObject.optCleanString(key: String): String? = cleanMetadataValue(optString(key, ""))
+
+private fun cleanMetadataValue(value: String?): String? {
+    val cleaned = value
+        ?.replace('\u0000', ' ')
+        ?.replace('\u00A0', ' ')
+        ?.trim()
+        ?.replace(Regex("\\s+"), " ")
+        .orEmpty()
+
+    return cleaned.takeIf { it.isNotBlank() && !it.equals("unknown", ignoreCase = true) }
+}
+
+private fun firstCleanMetadataValue(vararg values: String?): String? {
+    return values.firstNotNullOfOrNull { cleanMetadataValue(it) }
+}
+
+private fun LibraryItem.metadataSummary(): String? {
+    return listOfNotNull(
+        firstCleanMetadataValue(artist, albumArtist),
+        album,
+        year
+    ).distinct().joinToString(" / ").takeIf { it.isNotBlank() }
+}
+
+private fun LibraryItem.needsLocalMetadataRefresh(): Boolean {
+    if (sourceUrl != null) return false
+    val hasCover = coverArtPath?.let { File(it).exists() && File(it).length() > 0L } == true
+    return !hasCover || metadataSummary() == null || duration <= 0L
+}
 
 object ImageCache {
     val cache = java.util.concurrent.ConcurrentHashMap<String, ImageBitmap>()
@@ -679,7 +724,13 @@ class LibraryManager(context: Context) {
                 progress = obj.getLong("progress"), duration = obj.getLong("duration"), isVideo = obj.getBoolean("isVideo"),
                 recordings = recordingsList,
                 sourceUrl = if (obj.has("sourceUrl") && obj.getString("sourceUrl").isNotEmpty()) obj.getString("sourceUrl") else null,
-                formatId = if (obj.has("formatId") && obj.getString("formatId").isNotEmpty()) obj.getString("formatId") else null
+                formatId = if (obj.has("formatId") && obj.getString("formatId").isNotEmpty()) obj.getString("formatId") else null,
+                artist = obj.optCleanString("artist"),
+                album = obj.optCleanString("album"),
+                albumArtist = obj.optCleanString("albumArtist"),
+                genre = obj.optCleanString("genre"),
+                year = obj.optCleanString("year"),
+                coverArtPath = obj.optCleanString("coverArtPath")
             ))
         }
         return list
@@ -689,42 +740,43 @@ class LibraryManager(context: Context) {
         val current = getItems().toMutableList()
         val index = current.indexOfFirst { it.id == item.id }
         if (index >= 0) current[index] = item else current.add(0, item)
-        val array = JSONArray()
-        current.forEach {
-            val obj = JSONObject()
-            obj.put("id", it.id); obj.put("title", it.title); obj.put("mediaUri", it.mediaUri)
-            obj.put("subtitleUri", it.subtitleUri ?: ""); obj.put("progress", it.progress)
-            obj.put("duration", it.duration); obj.put("isVideo", it.isVideo)
-            obj.put("sourceUrl", it.sourceUrl ?: ""); obj.put("formatId", it.formatId ?: "")
-
-            val recArray = JSONArray()
-            it.recordings.forEach { rec ->
-                val recObj = JSONObject()
-                recObj.put("id", rec.id); recObj.put("filePath", rec.filePath)
-                recObj.put("startTime", rec.startTime); recObj.put("endTime", rec.endTime)
-                recObj.put("timestamp", rec.timestamp)
-                recArray.put(recObj)
-            }
-            obj.put("recordings", recArray)
-            array.put(obj)
-        }
-        prefs.edit { putString("items", array.toString()) }
+        prefs.edit { putString("items", itemsToJson(current).toString()) }
     }
 
     fun deleteItem(id: String) {
-        val current = getItems().filter { it.id != id }
-        val array = JSONArray()
-        current.forEach { item ->
-            val obj = JSONObject().apply {
-                put("id", item.id); put("title", item.title); put("mediaUri", item.mediaUri)
-                put("subtitleUri", item.subtitleUri ?: ""); put("progress", item.progress)
-                put("duration", item.duration); put("isVideo", item.isVideo)
-                put("sourceUrl", item.sourceUrl ?: ""); put("formatId", item.formatId ?: "")
-                put("recordings", JSONArray())
-            }
-            array.put(obj)
+        val items = getItems()
+        items.firstOrNull { it.id == id }?.coverArtPath?.let { path ->
+            try { File(path).delete() } catch (e: Exception) {}
         }
-        prefs.edit { putString("items", array.toString()) }
+        prefs.edit { putString("items", itemsToJson(items.filter { it.id != id }).toString()) }
+    }
+
+    private fun itemsToJson(items: List<LibraryItem>): JSONArray {
+        val array = JSONArray()
+        items.forEach { array.put(itemToJson(it)) }
+        return array
+    }
+
+    private fun itemToJson(item: LibraryItem): JSONObject {
+        val obj = JSONObject()
+        obj.put("id", item.id); obj.put("title", item.title); obj.put("mediaUri", item.mediaUri)
+        obj.put("subtitleUri", item.subtitleUri ?: ""); obj.put("progress", item.progress)
+        obj.put("duration", item.duration); obj.put("isVideo", item.isVideo)
+        obj.put("sourceUrl", item.sourceUrl ?: ""); obj.put("formatId", item.formatId ?: "")
+        obj.put("artist", item.artist ?: ""); obj.put("album", item.album ?: "")
+        obj.put("albumArtist", item.albumArtist ?: ""); obj.put("genre", item.genre ?: "")
+        obj.put("year", item.year ?: ""); obj.put("coverArtPath", item.coverArtPath ?: "")
+
+        val recArray = JSONArray()
+        item.recordings.forEach { rec ->
+            val recObj = JSONObject()
+            recObj.put("id", rec.id); recObj.put("filePath", rec.filePath)
+            recObj.put("startTime", rec.startTime); recObj.put("endTime", rec.endTime)
+            recObj.put("timestamp", rec.timestamp)
+            recArray.put(recObj)
+        }
+        obj.put("recordings", recArray)
+        return obj
     }
 }
 
@@ -1374,6 +1426,8 @@ private fun playerNotificationPendingIntent(context: Context, action: String): P
 private fun showPlayerNotification(
     context: Context,
     title: String,
+    subtitle: String?,
+    coverArtPath: String?,
     currentPos: Long,
     duration: Long,
     isPlaying: Boolean,
@@ -1390,16 +1444,22 @@ private fun showPlayerNotification(
         Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
         flags
     )
+    val timeText = "${formatTime(currentPos)} / ${formatTime(duration)}"
+    val largeIcon = coverArtPath?.let { decodeSampledBitmapFile(it, maxSize = 512) }
 
     val notification = NotificationCompat.Builder(context, PLAYER_NOTIFICATION_CHANNEL_ID)
         .setSmallIcon(android.R.drawable.ic_media_play)
         .setContentTitle(title)
-        .setContentText("${formatTime(currentPos)} / ${formatTime(duration)}")
+        .setContentText(subtitle ?: timeText)
+        .setSubText(timeText)
         .setContentIntent(contentIntent)
         .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
         .setOnlyAlertOnce(true)
         .setShowWhen(false)
         .setOngoing(isPlaying)
+        .also { builder ->
+            if (largeIcon != null) builder.setLargeIcon(largeIcon)
+        }
         .addAction(
             android.R.drawable.ic_media_rew,
             "-${skipSeconds}s",
@@ -1615,6 +1675,182 @@ private fun initialPlayableMediaUri(item: LibraryItem): String? {
     return mediaUri.takeIf { it != item.sourceUrl }
 }
 
+private fun extractMediaMetadata(context: Context, uri: Uri, itemId: String, isVideo: Boolean): MediaMetadataSnapshot {
+    var retriever: MediaMetadataRetriever? = null
+    var pfd: ParcelFileDescriptor? = null
+    var title: String? = null
+    var artist: String? = null
+    var album: String? = null
+    var albumArtist: String? = null
+    var genre: String? = null
+    var year: String? = null
+    var durationMs: Long? = null
+    var coverArtPath: String? = null
+
+    try {
+        retriever = MediaMetadataRetriever()
+        if (uri.scheme == "file") {
+            retriever.setDataSource(File(uri.path ?: "").absolutePath)
+        } else {
+            pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            if (pfd != null) retriever.setDataSource(pfd.fileDescriptor)
+        }
+
+        title = retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE)
+        artist = firstCleanMetadataValue(
+            retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST),
+            retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_AUTHOR),
+            retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_WRITER),
+            retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_COMPOSER)
+        )
+        album = retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+        albumArtist = retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+        genre = retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE)
+        year = firstCleanMetadataValue(
+            retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_YEAR),
+            retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_DATE)
+        )?.take(4)
+        durationMs = retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()
+
+        coverArtPath = if (isVideo) {
+            retriever.getFrameAtTime(10_000_000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?.let { cacheCoverBitmap(context, itemId, it) }
+        } else {
+            retriever.embeddedPicture?.let { cacheCoverBytes(context, itemId, it) }
+        }
+    } catch (e: Throwable) {
+        e.printStackTrace()
+    } finally {
+        try { retriever?.release() } catch (e: Throwable) {}
+        try { pfd?.close() } catch (e: Throwable) {}
+    }
+
+    if (coverArtPath == null && !isVideo) {
+        coverArtPath = extractAttachedPictureWithFfmpeg(context, itemId, uri)
+    }
+
+    return MediaMetadataSnapshot(
+        title = title,
+        artist = artist,
+        album = album,
+        albumArtist = albumArtist,
+        genre = genre,
+        year = year,
+        durationMs = durationMs,
+        coverArtPath = coverArtPath
+    )
+}
+
+private fun MediaMetadataRetriever.cleanMetadata(keyCode: Int): String? {
+    return try {
+        cleanMetadataValue(extractMetadata(keyCode))
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private fun decodeSampledBitmapFile(path: String, maxSize: Int = 1024): Bitmap? {
+    val file = File(path)
+    if (!file.exists() || file.length() <= 0L) return null
+
+    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(file.absolutePath, boundsOptions)
+    if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+    var scale = 1
+    while (boundsOptions.outWidth / scale > maxSize || boundsOptions.outHeight / scale > maxSize) scale *= 2
+
+    return BitmapFactory.decodeFile(file.absolutePath, BitmapFactory.Options().apply { inSampleSize = scale })
+}
+
+private fun cacheCoverBytes(context: Context, itemId: String, bytes: ByteArray): String? {
+    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
+
+    if (boundsOptions.outWidth <= 0 || boundsOptions.outHeight <= 0) return null
+
+    var scale = 1
+    while (boundsOptions.outWidth / scale > 1024 || boundsOptions.outHeight / scale > 1024) scale *= 2
+
+    val decodeOptions = BitmapFactory.Options().apply { inSampleSize = scale }
+    val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return null
+    return cacheCoverBitmap(context, itemId, bitmap)
+}
+
+private fun cacheCoverBitmap(context: Context, itemId: String, bitmap: Bitmap): String? {
+    val coverDir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir, "MetadataCovers")
+        .apply { mkdirs() }
+    val safeId = itemId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+    val coverFile = File(coverDir, "$safeId.jpg")
+
+    return try {
+        coverFile.outputStream().use { output ->
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 92, output)
+        }
+        coverFile.takeIf { it.length() > 0L }?.absolutePath
+    } catch (e: Exception) {
+        e.printStackTrace()
+        try { coverFile.delete() } catch (deleteError: Exception) {}
+        null
+    }
+}
+
+private fun extractAttachedPictureWithFfmpeg(context: Context, itemId: String, uri: Uri): String? {
+    ensureMediaToolsReady(context)
+    val input = resolveFfmpegInput(context, uri, preferFileDescriptor = false) ?: return null
+    val coverDir = File(context.getExternalFilesDir(Environment.DIRECTORY_PICTURES) ?: context.filesDir, "MetadataCovers")
+        .apply { mkdirs() }
+    val safeId = itemId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+    val tempCover = File(coverDir, "$safeId.ffmpeg.jpg")
+
+    return try {
+        try { tempCover.delete() } catch (e: Exception) {}
+        val rc = FFmpeg.getInstance().execute(
+            arrayOf(
+                "-y",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-i",
+                input.value,
+                "-map",
+                "0:v:0",
+                "-frames:v",
+                "1",
+                tempCover.absolutePath
+            )
+        )
+
+        if (rc == 0 && tempCover.length() > 0L) {
+            BitmapFactory.decodeFile(tempCover.absolutePath)
+                ?.let { cacheCoverBitmap(context, itemId, it) }
+        } else {
+            null
+        }
+    } catch (e: Exception) {
+        e.printStackTrace()
+        null
+    } finally {
+        try { tempCover.delete() } catch (e: Exception) {}
+        try { input.tempFile?.delete() } catch (e: Exception) {}
+        try { input.pfd?.close() } catch (e: Exception) {}
+    }
+}
+
+private fun mergeMetadataIntoItem(item: LibraryItem, metadata: MediaMetadataSnapshot, fallbackTitle: String = item.title): LibraryItem {
+    return item.copy(
+        title = metadata.title ?: cleanMetadataValue(fallbackTitle) ?: item.title,
+        duration = if (item.duration > 0L) item.duration else metadata.durationMs ?: item.duration,
+        artist = metadata.artist ?: item.artist,
+        album = metadata.album ?: item.album,
+        albumArtist = metadata.albumArtist ?: item.albumArtist,
+        genre = metadata.genre ?: item.genre,
+        year = metadata.year ?: item.year,
+        coverArtPath = metadata.coverArtPath ?: item.coverArtPath
+    )
+}
+
 // ==========================================
 // 3. UI SCREENS
 // ==========================================
@@ -1623,15 +1859,19 @@ private fun initialPlayableMediaUri(item: LibraryItem): String? {
 @Composable
 fun LibraryScreen(items: List<LibraryItem>, onRefresh: () -> Unit, onItemClick: (LibraryItem) -> Unit, onDelete: (LibraryItem) -> Unit, onOpenSettings: () -> Unit) {
     val context = LocalContext.current
+    val importScope = rememberCoroutineScope()
+    val libraryManager = remember { LibraryManager(context) }
 
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingMediaUri by remember { mutableStateOf<Uri?>(null) }
     var pendingTitle by remember { mutableStateOf("") }
     var isVideoType by remember { mutableStateOf(false) }
+    var isImportingMedia by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var selectedFilter by remember { mutableStateOf("All") }
     var sortMode by remember { mutableStateOf("Recent") }
     var showSortMenu by remember { mutableStateOf(false) }
+    var attemptedMetadataRefresh by remember { mutableStateOf(false) }
 
     val filteredItems = remember(items, searchQuery, selectedFilter, sortMode) {
         val query = searchQuery.trim().lowercase(Locale.US)
@@ -1658,6 +1898,58 @@ fun LibraryScreen(items: List<LibraryItem>, onRefresh: () -> Unit, onItemClick: 
     val totalRecordings = remember(items) { items.sumOf { it.recordings.size } }
     val inProgressCount = remember(items) { items.count { it.duration > 0L && it.progress > 0L } }
 
+    LaunchedEffect(items) {
+        if (attemptedMetadataRefresh) return@LaunchedEffect
+        val candidates = items.filter { it.needsLocalMetadataRefresh() }
+        if (candidates.isEmpty()) {
+            attemptedMetadataRefresh = true
+            return@LaunchedEffect
+        }
+
+        attemptedMetadataRefresh = true
+        var changed = false
+        withContext(Dispatchers.IO) {
+            candidates.forEach { item ->
+                val metadata = extractMediaMetadata(context, Uri.parse(item.mediaUri), item.id, item.isVideo)
+                val updatedItem = mergeMetadataIntoItem(item, metadata)
+                if (updatedItem != item) {
+                    libraryManager.saveItem(updatedItem)
+                    changed = true
+                }
+            }
+        }
+        if (changed) onRefresh()
+    }
+
+    fun savePendingMedia(subtitleUri: Uri?) {
+        val mediaUri = pendingMediaUri ?: return
+        val fallbackTitle = pendingTitle.ifBlank { getFileName(context, mediaUri) }
+        val itemId = UUID.randomUUID().toString()
+
+        isImportingMedia = true
+        importScope.launch {
+            val metadata = withContext(Dispatchers.IO) {
+                extractMediaMetadata(context, mediaUri, itemId, isVideoType)
+            }
+            val baseItem = LibraryItem(
+                id = itemId,
+                title = fallbackTitle,
+                mediaUri = mediaUri.toString(),
+                subtitleUri = subtitleUri?.toString(),
+                progress = 0L,
+                duration = metadata.durationMs ?: 0L,
+                isVideo = isVideoType
+            )
+            libraryManager.saveItem(mergeMetadataIntoItem(baseItem, metadata, fallbackTitle))
+
+            isImportingMedia = false
+            showAddDialog = false
+            pendingMediaUri = null
+            pendingTitle = ""
+            onRefresh()
+        }
+    }
+
     val mediaLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -1672,10 +1964,7 @@ fun LibraryScreen(items: List<LibraryItem>, onRefresh: () -> Unit, onItemClick: 
     val subtitleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            val newItem = LibraryItem(UUID.randomUUID().toString(), pendingTitle, pendingMediaUri.toString(), uri.toString(), 0L, 0L, isVideoType)
-            LibraryManager(context).saveItem(newItem)
-            showAddDialog = false
-            onRefresh()
+            savePendingMedia(uri)
         }
     }
 
@@ -1793,17 +2082,28 @@ fun LibraryScreen(items: List<LibraryItem>, onRefresh: () -> Unit, onItemClick: 
 
     if (showAddDialog) {
         AlertDialog(
-            onDismissRequest = { showAddDialog = false },
+            onDismissRequest = { if (!isImportingMedia) showAddDialog = false },
             title = { Text("Add Subtitles?") },
-            text = { Text("Would you like to attach a subtitle file (.srt, .vtt, .ass) to '$pendingTitle'?") },
-            confirmButton = { Button(onClick = { subtitleLauncher.launch(arrayOf("*/*")) }) { Text("Select Subtitles") } },
+            text = {
+                Text(
+                    if (isImportingMedia) {
+                        "Reading embedded metadata and cover art..."
+                    } else {
+                        "Would you like to attach a subtitle file (.srt, .vtt, .ass) to '$pendingTitle'?"
+                    }
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = { subtitleLauncher.launch(arrayOf("*/*")) },
+                    enabled = !isImportingMedia
+                ) { Text("Select Subtitles") }
+            },
             dismissButton = {
-                OutlinedButton(onClick = {
-                    val newItem = LibraryItem(UUID.randomUUID().toString(), pendingTitle, pendingMediaUri.toString(), null, 0L, 0L, isVideoType)
-                    LibraryManager(context).saveItem(newItem)
-                    showAddDialog = false
-                    onRefresh()
-                }) { Text("Skip") }
+                OutlinedButton(
+                    onClick = { savePendingMedia(null) },
+                    enabled = !isImportingMedia
+                ) { Text("Skip") }
             }
         )
     }
@@ -2196,7 +2496,11 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     var isParsingSubtitles by remember { mutableStateOf(libraryItem.subtitleUri != null) }
     var currentSubtitleText by remember { mutableStateOf("") }
 
-    val albumArt = if (libraryItem.sourceUrl == null) loadAlbumArt(context, libraryItem.mediaUri, libraryItem.isVideo) else null
+    val albumArt = if (libraryItem.sourceUrl == null) {
+        loadAlbumArt(context, libraryItem.mediaUri, libraryItem.isVideo, libraryItem.coverArtPath)
+    } else {
+        null
+    }
 
     var isRecording by remember { mutableStateOf(false) }
     var shadowAudioRecorder by remember { mutableStateOf<ShadowAudioRecorder?>(null) }
@@ -2280,9 +2584,9 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         }
     }
 
-    LaunchedEffect(isPlayerNotificationVisible, isPlaying, currentPos / 1000L, duration, libraryItem.title, skipSeconds) {
+    LaunchedEffect(isPlayerNotificationVisible, isPlaying, currentPos / 1000L, duration, libraryItem.title, libraryItem.artist, libraryItem.album, libraryItem.coverArtPath, skipSeconds) {
         if (isPlayerNotificationVisible && actualMediaUri != null) {
-            showPlayerNotification(context, libraryItem.title, currentPos, duration, isPlaying, skipSeconds)
+            showPlayerNotification(context, libraryItem.title, libraryItem.metadataSummary(), libraryItem.coverArtPath, currentPos, duration, isPlaying, skipSeconds)
         } else {
             cancelPlayerNotification(context)
         }
@@ -2694,7 +2998,12 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
             }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
             }
-            Text(libraryItem.title, color = MaterialTheme.colorScheme.onBackground, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(libraryItem.title, color = MaterialTheme.colorScheme.onBackground, fontSize = 16.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                libraryItem.metadataSummary()?.let { summary ->
+                    Text(summary, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+            }
 
             if (libraryItem.subtitleUri != null || libraryItem.isVideo) {
                 var showSubMenu by remember { mutableStateOf(false) }
@@ -3524,7 +3833,8 @@ fun WaveformTrack(
 fun LibraryCard(item: LibraryItem, onClick: () -> Unit, onDelete: () -> Unit) {
     val context = LocalContext.current
     val progressPct = if (item.duration > 0) (item.progress.toFloat() / item.duration.toFloat()) else 0f
-    val albumArt = if (item.sourceUrl == null) loadAlbumArt(context, item.mediaUri, item.isVideo) else null
+    val albumArt = if (item.sourceUrl == null) loadAlbumArt(context, item.mediaUri, item.isVideo, item.coverArtPath) else null
+    val metadataLine = item.metadataSummary()
     val itemType = when {
         item.sourceUrl != null -> "YouTube"
         item.isVideo -> "Video"
@@ -3557,6 +3867,10 @@ fun LibraryCard(item: LibraryItem, onClick: () -> Unit, onDelete: () -> Unit) {
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(item.title, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                if (metadataLine != null) {
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(metadataLine, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AssistChip(
@@ -4390,78 +4704,74 @@ fun exportRecording(context: Context, file: File) {
 }
 
 @Composable
-fun loadAlbumArt(context: Context, uriString: String, isVideo: Boolean): ImageBitmap? {
-    var bitmap by remember(uriString) { mutableStateOf<ImageBitmap?>(ImageCache.cache[uriString]) }
+fun loadAlbumArt(context: Context, uriString: String, isVideo: Boolean, cachedCoverPath: String? = null): ImageBitmap? {
+    val cacheKey = cachedCoverPath?.takeIf { File(it).exists() && File(it).length() > 0L } ?: uriString
+    var bitmap by remember(cacheKey) { mutableStateOf<ImageBitmap?>(ImageCache.cache[cacheKey]) }
 
-    LaunchedEffect(uriString) {
+    LaunchedEffect(uriString, cachedCoverPath) {
         if (bitmap != null) return@LaunchedEffect
 
-        withContext(Dispatchers.IO) {
-            val uri = Uri.parse(uriString)
-            var bmImage: ImageBitmap? = null
+        val loadedImage = withContext(Dispatchers.IO) {
+            cachedCoverPath
+                ?.let { decodeSampledBitmapFile(it)?.asImageBitmap() }
+                ?: loadAlbumArtFromMedia(context, uriString, isVideo)
+        }
 
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                try {
-                    val bmp = context.contentResolver.loadThumbnail(uri, Size(800, 800), null)
-                    bmImage = bmp.asImageBitmap()
-                } catch (e: Throwable) { }
-            }
-
-            if (bmImage == null) {
-                var retriever: MediaMetadataRetriever? = null
-                var pfd: ParcelFileDescriptor? = null
-                try {
-                    retriever = MediaMetadataRetriever()
-                    if (uri.scheme == "file") {
-                        retriever.setDataSource(File(uri.path!!).absolutePath)
-                    } else {
-                        pfd = context.contentResolver.openFileDescriptor(uri, "r")
-                        if (pfd != null) retriever.setDataSource(pfd.fileDescriptor)
-                    }
-
-                    if (isVideo) {
-                        val durationStr = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-                        val duration = durationStr?.toLongOrNull() ?: 0L
-                        val randomTimeUs = if (duration > 60000L) {
-                            (duration * 1000 * (0.1 + Math.random() * 0.8)).toLong()
-                        } else {
-                            10000000L
-                        }
-                        val frame = retriever.getFrameAtTime(randomTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                            ?: retriever.getFrameAtTime(10000000, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-
-                        if (frame != null) bmImage = frame.asImageBitmap()
-
-                    } else {
-                        val artBytes = retriever.embeddedPicture
-                        if (artBytes != null) {
-                            val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                            BitmapFactory.decodeByteArray(artBytes, 0, artBytes.size, boundsOptions)
-
-                            var scale = 1
-                            while (boundsOptions.outWidth / scale > 1024 || boundsOptions.outHeight / scale > 1024) scale *= 2
-
-                            val decodeOptions = BitmapFactory.Options().apply { inSampleSize = scale }
-                            val bmp = BitmapFactory.decodeByteArray(artBytes, 0, artBytes.size, decodeOptions)
-
-                            if (bmp != null) bmImage = bmp.asImageBitmap()
-                        }
-                    }
-                } catch (e: Throwable) {
-                    e.printStackTrace()
-                } finally {
-                    try { retriever?.release() } catch (e: Throwable) {}
-                    try { pfd?.close() } catch (e: Throwable) {}
-                }
-            }
-
-            if (bmImage != null) {
-                ImageCache.cache[uriString] = bmImage
-                bitmap = bmImage
-            }
+        if (loadedImage != null) {
+            ImageCache.cache[cacheKey] = loadedImage
+            bitmap = loadedImage
         }
     }
     return bitmap
+}
+
+private fun loadAlbumArtFromMedia(context: Context, uriString: String, isVideo: Boolean): ImageBitmap? {
+    val uri = Uri.parse(uriString)
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+        try {
+            return context.contentResolver.loadThumbnail(uri, Size(800, 800), null).asImageBitmap()
+        } catch (e: Throwable) { }
+    }
+
+    var retriever: MediaMetadataRetriever? = null
+    var pfd: ParcelFileDescriptor? = null
+    return try {
+        retriever = MediaMetadataRetriever()
+        if (uri.scheme == "file") {
+            retriever.setDataSource(File(uri.path ?: "").absolutePath)
+        } else {
+            pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            if (pfd != null) retriever.setDataSource(pfd.fileDescriptor)
+        }
+
+        if (isVideo) {
+            val duration = retriever.cleanMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val randomTimeUs = if (duration > 60000L) {
+                (duration * 1000 * (0.1 + Math.random() * 0.8)).toLong()
+            } else {
+                10_000_000L
+            }
+            retriever.getFrameAtTime(randomTimeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?.asImageBitmap()
+        } else {
+            retriever.embeddedPicture
+                ?.let { bytes ->
+                    val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
+                    var scale = 1
+                    while (boundsOptions.outWidth / scale > 1024 || boundsOptions.outHeight / scale > 1024) scale *= 2
+                    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = scale })
+                        ?.asImageBitmap()
+                }
+        }
+    } catch (e: Throwable) {
+        e.printStackTrace()
+        null
+    } finally {
+        try { retriever?.release() } catch (e: Throwable) {}
+        try { pfd?.close() } catch (e: Throwable) {}
+    }
 }
 
 fun parseSimpleSubtitles(context: Context, uri: Uri): List<SubtitleCue> {

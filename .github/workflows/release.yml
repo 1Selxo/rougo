@@ -3,7 +3,9 @@ name: Build and Release
 on:
   push:
     tags:
+      - 'V*'
       - 'v*'
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,10 +18,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
+          java-version: '21'
           distribution: 'temurin'
           cache: 'gradle'
 
@@ -27,15 +29,28 @@ jobs:
         run: chmod +x ./gradlew
 
       - name: Build with Gradle
-        run: ./gradlew assembleRelease
+        run: ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rougo-${{ github.ref_name }}-release-apks
+          path: app/build/outputs/apk/release/*.apk
 
       - name: Create Release
-        id: create_release
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/release/*.apk
-          name: Release ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
           draft: false
           prerelease: false
+          make_latest: true
+          body: |
+            V2 release built by GitHub Actions.
+
+            - Loads embedded audiobook metadata for local media.
+            - Extracts and caches embedded M4B cover art, including attached-picture streams.
+            - Keeps the app-visible version at V2.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
