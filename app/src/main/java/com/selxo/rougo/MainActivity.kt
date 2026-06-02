@@ -27,6 +27,7 @@ import android.os.Environment
 import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.OpenableColumns
+import android.text.Html
 import android.util.Size
 import android.util.Log
 import android.widget.Toast
@@ -42,14 +43,21 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.FlingBehavior
+import androidx.compose.foundation.gestures.ScrollScope
+import androidx.compose.foundation.gestures.ScrollableDefaults
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.LocalOverscrollFactory
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -63,16 +71,23 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -958,7 +973,8 @@ private data class YoutubeStreamFormat(
     val height: Int,
     val tbr: Int,
     val url: String?,
-    val manifestUrl: String?
+    val manifestUrl: String?,
+    val protocol: String?
 )
 
 private data class YoutubeSetupData(
@@ -974,6 +990,12 @@ private data class YoutubeSetupData(
 private data class YoutubeResolutionOption(val key: String, val label: String)
 private data class AccentOption(val key: String, val label: String, val darkColor: Color, val lightColor: Color)
 enum class LibraryDownloadState { Idle, Loading, Complete }
+
+private enum class PairedPlaybackExitMode {
+    PauseBoth,
+    ContinueOriginal,
+    ContinueVoice
+}
 
 private const val PREF_YOUTUBE_RESOLUTION = "youtube_preferred_resolution"
 private const val PREF_YOUTUBE_AUTO_SUBTITLES = "youtube_auto_subtitles"
@@ -1169,8 +1191,8 @@ fun downloadAndInstallUpdate(context: Context, downloadUrl: String) {
     val destinationFile = File(downloadsDir, fileName)
     try { destinationFile.delete() } catch (e: Exception) {}
     val request = DownloadManager.Request(Uri.parse(downloadUrl))
-        .setTitle("朗語 Update")
-        .setDescription("Downloading latest version...")
+        .setTitle(fileName)
+        .setDescription("Downloading Rougo update...")
         .setMimeType("application/vnd.android.package-archive")
         .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
         .setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
@@ -1183,8 +1205,9 @@ fun downloadAndInstallUpdate(context: Context, downloadUrl: String) {
         override fun onReceive(context: Context, intent: Intent) {
             val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L)
             if (id == downloadId) {
-                if (isDownloadSuccessful(downloadManager, downloadId) && destinationFile.exists() && destinationFile.length() > 0L) {
-                    installApk(context, destinationFile)
+                val downloadedFile = resolveDownloadedUpdateFile(downloadManager, downloadId, destinationFile)
+                if (isDownloadSuccessful(downloadManager, downloadId) && downloadedFile.exists() && downloadedFile.length() > 0L) {
+                    installApk(context, downloadedFile)
                 } else {
                     Toast.makeText(context, "Update download failed.", Toast.LENGTH_LONG).show()
                 }
@@ -1202,24 +1225,87 @@ fun downloadAndInstallUpdate(context: Context, downloadUrl: String) {
 }
 
 private fun updateDownloadFileName(downloadUrl: String): String {
-    val rawName = Uri.parse(downloadUrl).lastPathSegment
+    var rawName = Uri.parse(downloadUrl).lastPathSegment
         ?.substringAfterLast('/')
         ?.replace(Regex("[^A-Za-z0-9._-]"), "_")
-        ?.takeIf { it.isNotBlank() && it.endsWith(".apk", ignoreCase = true) }
-        ?: "update.apk"
-    return "rougo-${System.currentTimeMillis()}-$rawName"
+        ?.takeIf { it.isNotBlank() }
+        ?: "update"
+    if (rawName.endsWith(".apk", ignoreCase = true)) {
+        rawName = rawName.dropLast(4)
+    }
+    val safeBaseName = rawName.trim('.', '_', '-').ifBlank { "update" }
+    return "rougo-${System.currentTimeMillis()}-$safeBaseName.apk"
 }
 
 private fun cleanupOldUpdateApks(downloadsDir: File?) {
     downloadsDir?.listFiles()
         ?.filter { file ->
             file.isFile &&
-                file.extension.equals("apk", ignoreCase = true) &&
-                (file.name == "update.apk" || file.name.startsWith("rougo-"))
+                (
+                    file.name.equals("update", ignoreCase = true) ||
+                        file.name.equals("update.apk", ignoreCase = true) ||
+                        file.name.startsWith("rougo-")
+                )
         }
         ?.forEach { file ->
             try { file.delete() } catch (e: Exception) {}
         }
+}
+
+private fun resolveDownloadedUpdateFile(downloadManager: DownloadManager, downloadId: Long, expectedApkFile: File): File {
+    if (expectedApkFile.exists() && expectedApkFile.length() > 0L) return expectedApkFile
+    val downloadedFile = queryDownloadedFile(downloadManager, downloadId)
+    return if (downloadedFile != null && downloadedFile.exists() && downloadedFile.length() > 0L) {
+        ensureUpdateApkExtension(downloadedFile, expectedApkFile)
+    } else {
+        expectedApkFile
+    }
+}
+
+private fun queryDownloadedFile(downloadManager: DownloadManager, downloadId: Long): File? {
+    return try {
+        downloadManager.query(DownloadManager.Query().setFilterById(downloadId))?.use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val localUriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+            if (localUriIndex >= 0) {
+                val localUri = cursor.getString(localUriIndex)
+                if (!localUri.isNullOrBlank()) {
+                    val uri = Uri.parse(localUri)
+                    if (uri.scheme.equals("file", ignoreCase = true)) {
+                        uri.path?.let { return File(it) }
+                    }
+                }
+            }
+
+            val localFileIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_FILENAME)
+            if (localFileIndex >= 0) {
+                cursor.getString(localFileIndex)?.takeIf { it.isNotBlank() }?.let { return File(it) }
+            }
+            null
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private fun ensureUpdateApkExtension(downloadedFile: File, expectedApkFile: File): File {
+    if (downloadedFile.name.endsWith(".apk", ignoreCase = true)) return downloadedFile
+    return try {
+        expectedApkFile.parentFile?.mkdirs()
+        try { expectedApkFile.delete() } catch (e: Exception) {}
+        if (downloadedFile.renameTo(expectedApkFile)) {
+            expectedApkFile
+        } else {
+            downloadedFile.inputStream().use { input ->
+                expectedApkFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+            expectedApkFile
+        }
+    } catch (e: Exception) {
+        downloadedFile
+    }
 }
 
 private fun isDownloadSuccessful(downloadManager: DownloadManager, downloadId: Long): Boolean {
@@ -1641,6 +1727,12 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
             }
             setupData = fetchedSetupData
             subtitleChoices = fetchedSetupData.subtitleChoices
+            if (shouldAutoDownloadSubtitles && selectedSubtitleKey == null) {
+                selectPreferredYoutubeSubtitle(fetchedSetupData.subtitleChoices, preferredSubtitleLanguage)?.let { choice ->
+                    selectedSubtitleKey = choice.languageCode
+                    isAutoSub = choice.isAutoGenerated
+                }
+            }
 
             if (downloadBeforePlayback) {
                 isProcessing = true
@@ -1671,7 +1763,7 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
                     val subtitleUri = if (subtitleChoice != null) {
                         status = "Fetching subtitles..."
                         withContext(Dispatchers.IO) {
-                            downloadYoutubeSubtitle(context, url, subtitleChoice.languageCode, subtitleChoice.isAutoGenerated)
+                            downloadPreferredYoutubeSubtitle(context, url, fetchedSetupData.subtitleChoices, preferredSubtitleLanguage)
                         }
                     } else {
                         null
@@ -1772,7 +1864,11 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
                         ((it.vcodec != "none" && it.acodec != "none") || (it.vcodec == "none" && it.acodec != "none")) &&
                             (!it.url.isNullOrBlank() || !it.manifestUrl.isNullOrBlank())
                     }?.distinctBy { it.formatId ?: "${it.height}-${it.ext}-${it.vcodec}-${it.acodec}" }
-                        ?.sortedWith(compareByDescending<YoutubeStreamFormat> { if (it.vcodec == "none") 0 else it.height }.thenByDescending { it.tbr })
+                        ?.sortedWith(
+                            compareByDescending<YoutubeStreamFormat> { if (it.vcodec == "none") 0 else it.height }
+                                .thenByDescending { if (it.isVlcFriendlyVideoFormat() || it.isVlcFriendlyAudioFormat()) 1 else 0 }
+                                .thenByDescending { it.tbr }
+                        )
                         ?: emptyList()
 
                     LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
@@ -1920,7 +2016,7 @@ private suspend fun createYoutubeLibraryItem(
     LibraryItem(
         id = itemId,
         title = setupData?.title ?: "YouTube Stream",
-        mediaUri = format.url ?: format.manifestUrl ?: setupData?.fallbackUrl ?: sourceUrl,
+        mediaUri = sourceUrl,
         subtitleUri = subtitleUri,
         progress = 0L,
         duration = 0L,
@@ -2085,6 +2181,44 @@ private fun selectPreferredYoutubeSubtitle(choices: List<YoutubeSubtitleChoice>,
     } ?: choices.firstOrNull()
 }
 
+private fun youtubeSubtitleChoiceKey(choice: YoutubeSubtitleChoice): String {
+    return "${choice.languageCode}:${choice.isAutoGenerated}"
+}
+
+private fun preferredYoutubeSubtitleCandidates(
+    choices: List<YoutubeSubtitleChoice>,
+    preferredLanguage: String
+): List<YoutubeSubtitleChoice> {
+    val preferredChoice = selectPreferredYoutubeSubtitle(choices, preferredLanguage) ?: return emptyList()
+    val normalizedPreference = preferredLanguage.lowercase(Locale.US)
+    val preferredLanguageMatches = if (normalizedPreference == "any") {
+        emptyList()
+    } else {
+        choices.filter { choice ->
+            val code = choice.languageCode.lowercase(Locale.US)
+            code == normalizedPreference || code.startsWith("$normalizedPreference-")
+        }
+    }
+    return (listOf(preferredChoice) +
+        choices.filter { it.languageCode == preferredChoice.languageCode } +
+        preferredLanguageMatches +
+        choices.take(2))
+        .distinctBy { youtubeSubtitleChoiceKey(it) }
+}
+
+private fun downloadPreferredYoutubeSubtitle(
+    context: Context,
+    url: String,
+    choices: List<YoutubeSubtitleChoice>,
+    preferredLanguage: String
+): String? {
+    preferredYoutubeSubtitleCandidates(choices, preferredLanguage).forEach { choice ->
+        val subtitleUri = downloadYoutubeSubtitle(context, url, choice.languageCode, choice.isAutoGenerated)
+        if (subtitleUri != null) return subtitleUri
+    }
+    return null
+}
+
 private fun selectPreferredYoutubeFormat(
     formats: List<YoutubeStreamFormat>,
     preferredResolution: String
@@ -2092,10 +2226,10 @@ private fun selectPreferredYoutubeFormat(
     val playable = formats.filter { !it.url.isNullOrBlank() || !it.manifestUrl.isNullOrBlank() }
     val audioFormats = playable
         .filter { it.vcodec == "none" && it.acodec != "none" }
-        .sortedWith(compareByDescending<YoutubeStreamFormat> { it.tbr }.thenByDescending { it.formatId ?: "" })
+        .sortedWith(compareByDescending<YoutubeStreamFormat> { if (it.isVlcFriendlyAudioFormat()) 1 else 0 }.thenByDescending { it.tbr }.thenByDescending { it.formatId ?: "" })
     val videoFormats = playable
         .filter { it.vcodec != "none" && it.acodec != "none" }
-        .sortedWith(compareByDescending<YoutubeStreamFormat> { it.height }.thenByDescending { it.tbr })
+        .sortedWith(compareByDescending<YoutubeStreamFormat> { it.height }.thenByDescending { if (it.isVlcFriendlyVideoFormat()) 1 else 0 }.thenByDescending { it.tbr })
 
     return when (preferredResolution) {
         YOUTUBE_RESOLUTION_AUDIO -> audioFormats.firstOrNull() ?: videoFormats.firstOrNull()
@@ -2116,7 +2250,7 @@ private fun selectPreferredYoutubeFormat(
 private fun resolveYoutubeStreamUrl(context: Context, url: String, formatId: String?): String? {
     val json = fetchYoutubeInfoJson(context, url)
     val targetFormat = parseYoutubeFormats(json).firstOrNull { it.formatId == formatId }
-    return targetFormat?.url ?: targetFormat?.manifestUrl ?: json.optString("url").takeIf { it.isNotBlank() }
+    return targetFormat?.bestPlaybackUrl() ?: json.optString("url").takeIf { it.isNotBlank() }
 }
 
 private fun fetchYoutubeInfoJson(context: Context, url: String): JSONObject {
@@ -2292,7 +2426,8 @@ private fun parseYoutubeFormats(json: JSONObject): List<YoutubeStreamFormat> {
                 height = format.optInt("height", 0),
                 tbr = format.optDouble("tbr", 0.0).toInt(),
                 url = format.optString("url").takeIf { it.isNotBlank() },
-                manifestUrl = format.optString("manifest_url").takeIf { it.isNotBlank() }
+                manifestUrl = format.optString("manifest_url").takeIf { it.isNotBlank() },
+                protocol = format.optString("protocol").takeIf { it.isNotBlank() }
             )
         )
     }
@@ -2304,7 +2439,41 @@ private fun initialPlayableMediaUri(item: LibraryItem): String? {
     val mediaUri = item.mediaUri.trim()
     if (mediaUri.isBlank()) return null
     if (item.sourceUrl == null) return mediaUri
-    return mediaUri.takeIf { it != item.sourceUrl }
+    return mediaUri.takeIf { item.hasDownloadedLocalCopy() }
+}
+
+private fun YoutubeStreamFormat.bestPlaybackUrl(): String? {
+    val manifest = manifestUrl?.takeIf { it.isNotBlank() }
+    val directUrl = url?.takeIf { it.isNotBlank() }
+    val protocolValue = protocol?.lowercase(Locale.US).orEmpty()
+    return when {
+        protocolValue.contains("m3u8") -> directUrl ?: manifest
+        protocolValue.contains("dash") -> manifest ?: directUrl
+        isVlcFriendlyVideoFormat() || isVlcFriendlyAudioFormat() -> directUrl ?: manifest
+        else -> manifest ?: directUrl
+    }
+}
+
+private fun YoutubeStreamFormat.isVlcFriendlyVideoFormat(): Boolean {
+    if (vcodec == "none" || acodec == "none") return false
+    val extValue = ext?.lowercase(Locale.US).orEmpty()
+    val videoCodec = vcodec?.lowercase(Locale.US).orEmpty()
+    val audioCodec = acodec?.lowercase(Locale.US).orEmpty()
+    return extValue == "mp4" &&
+        (videoCodec.startsWith("avc") || videoCodec.startsWith("h264")) &&
+        (audioCodec.startsWith("mp4a") || audioCodec.startsWith("aac"))
+}
+
+private fun YoutubeStreamFormat.isVlcFriendlyAudioFormat(): Boolean {
+    if (vcodec != "none" || acodec == "none") return false
+    val extValue = ext?.lowercase(Locale.US).orEmpty()
+    val audioCodec = acodec?.lowercase(Locale.US).orEmpty()
+    return extValue == "m4a" || extValue == "mp4" || audioCodec.startsWith("mp4a") || audioCodec.startsWith("aac")
+}
+
+private fun LibraryItem.persistableMediaUri(actualMediaUri: String?): String {
+    if (sourceUrl == null || hasDownloadedLocalCopy()) return actualMediaUri ?: mediaUri
+    return sourceUrl
 }
 
 private fun extractMediaMetadata(context: Context, uri: Uri, itemId: String, isVideo: Boolean): MediaMetadataSnapshot {
@@ -3373,6 +3542,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     var isLoadingYoutubeSubtitleChoices by remember(libraryItem.id) { mutableStateOf(false) }
     var youtubeSubtitleChoicesLoaded by remember(libraryItem.id) { mutableStateOf(false) }
     var selectedYoutubeSubtitleKey by remember(libraryItem.id) { mutableStateOf<String?>(null) }
+    var autoSubtitleRetryAttempted by remember(libraryItem.id) { mutableStateOf(false) }
 
     val albumArt = if (libraryItem.sourceUrl == null || libraryItem.hasDownloadedLocalCopy()) {
         loadAlbumArt(context, libraryItem.mediaUri, libraryItem.isVideo, libraryItem.coverArtPath)
@@ -3387,6 +3557,8 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     val recordings = remember { mutableStateListOf<ShadowRecording>().apply { addAll(libraryItem.recordings) } }
     var activeOriginalSegment by remember { mutableStateOf<ShadowRecording?>(null) }
     var activeBothSegment by remember { mutableStateOf<ShadowRecording?>(null) }
+    var continuingOriginalSegment by remember { mutableStateOf<ShadowRecording?>(null) }
+    var pairedPlaybackExitMode by remember { mutableStateOf(PairedPlaybackExitMode.PauseBoth) }
     var repeatPracticeSegment by remember { mutableStateOf<ShadowRecording?>(null) }
     var repeatAttemptCount by remember { mutableIntStateOf(0) }
 
@@ -3550,7 +3722,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
             }
             if (!resolvedUri.isNullOrBlank()) {
                 actualMediaUri = resolvedUri
-                libraryItem = libraryItem.copy(mediaUri = resolvedUri, progress = currentPos)
+                libraryItem = libraryItem.copy(progress = currentPos)
                 LibraryManager(context).saveItem(libraryItem)
             }
             isRefreshingStream = false
@@ -3558,7 +3730,12 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     }
 
     fun syncWithStorage() {
-        val updatedItem = libraryItem.copy(progress = currentPos, duration = duration, recordings = recordings.toList())
+        val updatedItem = libraryItem.copy(
+            progress = currentPos,
+            duration = duration,
+            recordings = recordings.toList(),
+            mediaUri = libraryItem.persistableMediaUri(actualMediaUri)
+        )
         LibraryManager(context).saveItem(updatedItem)
     }
 
@@ -3658,16 +3835,28 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
     fun toggleBothSegment(segment: ShadowRecording) {
         if (activeBothSegment?.id == segment.id) {
+            pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
             activeBothSegment = null
-            try { vlcPlayer.pause() } catch (e: Exception) {}
-            if (activeVoiceSegmentId == segment.id) {
-                try { voiceAudioPlayer.pause() } catch (e: Exception) {}
-                activeVoiceSegmentId = null
-            }
         } else {
             activeOriginalSegment = null
+            continuingOriginalSegment = null
+            pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
             activeBothSegment = segment
         }
+    }
+
+    fun pauseOriginalFromBoth(segment: ShadowRecording) {
+        if (activeBothSegment?.id != segment.id) return
+        pairedPlaybackExitMode = PairedPlaybackExitMode.ContinueVoice
+        continuingOriginalSegment = null
+        activeBothSegment = null
+    }
+
+    fun pauseVoiceFromBoth(segment: ShadowRecording) {
+        if (activeBothSegment?.id != segment.id) return
+        pairedPlaybackExitMode = PairedPlaybackExitMode.ContinueOriginal
+        continuingOriginalSegment = segment
+        activeBothSegment = null
     }
 
     DisposableEffect(Unit) {
@@ -3681,7 +3870,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     }
 
     BackHandler {
-        val updatedItem = libraryItem.copy(progress = currentPos, duration = duration, recordings = recordings.toList(), mediaUri = actualMediaUri ?: libraryItem.mediaUri)
+        val updatedItem = libraryItem.copy(progress = currentPos, duration = duration, recordings = recordings.toList(), mediaUri = libraryItem.persistableMediaUri(actualMediaUri))
         onBack(updatedItem)
     }
 
@@ -3761,11 +3950,83 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                     delay(25)
                 }
             } finally {
-                vlcPlayer.pause()
-                if (activeVoiceSegmentId == segment.id && voiceAudioPlayer.isPlaying) {
-                    try { voiceAudioPlayer.pause() } catch (e: Exception) {}
+                when (pairedPlaybackExitMode) {
+                    PairedPlaybackExitMode.PauseBoth -> {
+                        try { vlcPlayer.pause() } catch (e: Exception) {}
+                        if (activeVoiceSegmentId == segment.id && voiceAudioPlayer.isPlaying) {
+                            try { voiceAudioPlayer.pause() } catch (e: Exception) {}
+                        }
+                        if (activeVoiceSegmentId == segment.id) {
+                            activeVoiceSegmentId = null
+                            voiceCurrentPos = -1L
+                        }
+                    }
+                    PairedPlaybackExitMode.ContinueOriginal -> {
+                        if (activeVoiceSegmentId == segment.id && voiceAudioPlayer.isPlaying) {
+                            try { voiceAudioPlayer.pause() } catch (e: Exception) {}
+                        }
+                        if (activeVoiceSegmentId == segment.id) {
+                            activeVoiceSegmentId = null
+                            voiceCurrentPos = -1L
+                        }
+                        continuingOriginalSegment = segment
+                    }
+                    PairedPlaybackExitMode.ContinueVoice -> {
+                        try { vlcPlayer.pause() } catch (e: Exception) {}
+                    }
                 }
                 if (activeBothSegment?.id == segment.id) activeBothSegment = null
+                pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
+            }
+        }
+    }
+
+    LaunchedEffect(continuingOriginalSegment) {
+        continuingOriginalSegment?.let { segment ->
+            try {
+                if (!vlcPlayer.isPlaying) vlcPlayer.play()
+                while (continuingOriginalSegment?.id == segment.id && vlcPlayer.time < segment.endTime) {
+                    delay(50)
+                }
+            } finally {
+                if (continuingOriginalSegment?.id == segment.id) {
+                    try { vlcPlayer.pause() } catch (e: Exception) {}
+                    continuingOriginalSegment = null
+                }
+            }
+        }
+    }
+
+    LaunchedEffect(libraryItem.id, libraryItem.subtitleUri, libraryItem.sourceUrl) {
+        val sourceUrl = libraryItem.sourceUrl
+        if (
+            !autoSubtitleRetryAttempted &&
+            libraryItem.subtitleUri == null &&
+            sourceUrl != null &&
+            isYoutubeUrl(sourceUrl) &&
+            prefs.getBoolean(PREF_YOUTUBE_AUTO_SUBTITLES, true)
+        ) {
+            autoSubtitleRetryAttempted = true
+            val preferredLanguage = prefs.getString(PREF_YOUTUBE_SUBTITLE_LANGUAGE, DEFAULT_YOUTUBE_SUBTITLE_LANGUAGE)
+                ?: DEFAULT_YOUTUBE_SUBTITLE_LANGUAGE
+            val setupData = withContext(Dispatchers.IO) {
+                runCatching { fetchYoutubeSetupData(context, sourceUrl) }.getOrNull()
+            }
+            val subtitleUri = if (setupData != null) {
+                youtubeSubtitleChoices = setupData.subtitleChoices
+                youtubeSubtitleChoicesLoaded = true
+                withContext(Dispatchers.IO) {
+                    downloadPreferredYoutubeSubtitle(context, sourceUrl, setupData.subtitleChoices, preferredLanguage)
+                }
+            } else {
+                null
+            }
+            if (subtitleUri != null) {
+                val updatedItem = libraryItem.copy(subtitleUri = subtitleUri)
+                libraryItem = updatedItem
+                isSubtitlesVisible = true
+                selectedYoutubeSubtitleKey = null
+                LibraryManager(context).saveItem(updatedItem)
             }
         }
     }
@@ -3876,7 +4137,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                                     }
                                 }
                                 if (!refreshedUri.isNullOrBlank()) {
-                                    libraryItem = libraryItem.copy(mediaUri = refreshedUri, progress = currentPos)
+                                    libraryItem = libraryItem.copy(progress = currentPos)
                                     LibraryManager(context).saveItem(libraryItem)
                                     actualMediaUri = refreshedUri
                                 } else {
@@ -3913,7 +4174,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                 progress = vlcPlayer.time.coerceAtLeast(0),
                 duration = if (vlcPlayer.length > 0) vlcPlayer.length else duration,
                 recordings = recordings.toList(),
-                mediaUri = actualMediaUri ?: libraryItem.mediaUri
+                mediaUri = libraryItem.persistableMediaUri(actualMediaUri)
             )
             LibraryManager(context).saveItem(updatedItem)
 
@@ -3989,6 +4250,8 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
         repeatAttemptCount = 0
         activeOriginalSegment = null
+        continuingOriginalSegment = null
+        pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
         activeBothSegment = null
 
         try {
@@ -4050,10 +4313,15 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         var lastFrameMs = 0L
         var lastPolledMainPos = currentPos
         while (true) {
-            val activeTimeline = isPlaying || voiceAudioPlayer.isPlaying || activeOriginalSegment != null || activeBothSegment != null || repeatPracticeSegment != null
+            val activeTimeline = isPlaying ||
+                voiceAudioPlayer.isPlaying ||
+                activeOriginalSegment != null ||
+                activeBothSegment != null ||
+                continuingOriginalSegment != null ||
+                repeatPracticeSegment != null
             if (activeTimeline) {
                 val frameMs = withFrameMillis { it }
-                if (isPlaying || activeOriginalSegment != null || activeBothSegment != null || repeatPracticeSegment != null) {
+                if (isPlaying || activeOriginalSegment != null || activeBothSegment != null || continuingOriginalSegment != null || repeatPracticeSegment != null) {
                     val polledPos = vlcPlayer.time.coerceAtLeast(0L)
                     val frameDelta = if (lastFrameMs > 0L) (frameMs - lastFrameMs).coerceIn(0L, 100L) else 0L
                     currentPos = if (polledPos == lastPolledMainPos && frameDelta > 0L && duration > 0L) {
@@ -4086,7 +4354,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
-                val updatedItem = libraryItem.copy(progress = currentPos, duration = duration, recordings = recordings.toList(), mediaUri = actualMediaUri ?: libraryItem.mediaUri)
+                val updatedItem = libraryItem.copy(progress = currentPos, duration = duration, recordings = recordings.toList(), mediaUri = libraryItem.persistableMediaUri(actualMediaUri))
                 onBack(updatedItem)
             }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = MaterialTheme.colorScheme.onBackground)
@@ -4441,12 +4709,24 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             context = context,
                             originalMediaUri = actualMediaUri ?: libraryItem.mediaUri,
                             onPlayOriginal = {
-                                activeBothSegment = null
-                                activeOriginalSegment = if (activeOriginalSegment?.id == latest.id) null else latest
+                                if (activeBothSegment?.id == latest.id) {
+                                    pauseOriginalFromBoth(latest)
+                                } else {
+                                    pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
+                                    activeBothSegment = null
+                                    continuingOriginalSegment = null
+                                    activeOriginalSegment = if (activeOriginalSegment?.id == latest.id) null else latest
+                                }
                             },
                             onPlayVoice = {
-                                activeBothSegment = null
-                                toggleVoiceSegment(latest)
+                                if (activeBothSegment?.id == latest.id) {
+                                    pauseVoiceFromBoth(latest)
+                                } else {
+                                    pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
+                                    activeBothSegment = null
+                                    continuingOriginalSegment = null
+                                    toggleVoiceSegment(latest)
+                                }
                             },
                             onPlayBoth = { toggleBothSegment(latest) },
                             onSeekOriginal = { targetMs -> seekMainPlayer(targetMs, resumeAfterSeek = false) },
@@ -4468,7 +4748,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             isRepeatPracticeActive = repeatPracticeSegment?.id == latest.id,
                             currentOriginalTime = currentPos,
                             currentRecordedTime = if (activeVoiceSegmentId == latest.id || activeBothSegment?.id == latest.id) voiceCurrentPos else -1L,
-                            isOriginalPlaying = activeOriginalSegment?.id == latest.id || activeBothSegment?.id == latest.id,
+                            isOriginalPlaying = activeOriginalSegment?.id == latest.id || activeBothSegment?.id == latest.id || continuingOriginalSegment?.id == latest.id,
                             isRecordedPlaying = (activeVoiceSegmentId == latest.id && voiceAudioPlayer.isPlaying) || activeBothSegment?.id == latest.id,
                             isBothPlaying = activeBothSegment?.id == latest.id
                         )
@@ -4503,12 +4783,24 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             context = context,
                             originalMediaUri = actualMediaUri ?: libraryItem.mediaUri,
                             onPlayOriginal = {
-                                activeBothSegment = null
-                                activeOriginalSegment = if (activeOriginalSegment?.id == rec.id) null else rec
+                                if (activeBothSegment?.id == rec.id) {
+                                    pauseOriginalFromBoth(rec)
+                                } else {
+                                    pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
+                                    activeBothSegment = null
+                                    continuingOriginalSegment = null
+                                    activeOriginalSegment = if (activeOriginalSegment?.id == rec.id) null else rec
+                                }
                             },
                             onPlayVoice = {
-                                activeBothSegment = null
-                                toggleVoiceSegment(rec)
+                                if (activeBothSegment?.id == rec.id) {
+                                    pauseVoiceFromBoth(rec)
+                                } else {
+                                    pairedPlaybackExitMode = PairedPlaybackExitMode.PauseBoth
+                                    activeBothSegment = null
+                                    continuingOriginalSegment = null
+                                    toggleVoiceSegment(rec)
+                                }
                             },
                             onPlayBoth = { toggleBothSegment(rec) },
                             onSeekOriginal = { targetMs -> seekMainPlayer(targetMs, resumeAfterSeek = false) },
@@ -4530,7 +4822,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             isRepeatPracticeActive = repeatPracticeSegment?.id == rec.id,
                             currentOriginalTime = currentPos,
                             currentRecordedTime = if (activeVoiceSegmentId == rec.id || activeBothSegment?.id == rec.id) voiceCurrentPos else -1L,
-                            isOriginalPlaying = activeOriginalSegment?.id == rec.id || activeBothSegment?.id == rec.id,
+                            isOriginalPlaying = activeOriginalSegment?.id == rec.id || activeBothSegment?.id == rec.id || continuingOriginalSegment?.id == rec.id,
                             isRecordedPlaying = (activeVoiceSegmentId == rec.id && voiceAudioPlayer.isPlaying) || activeBothSegment?.id == rec.id,
                             isBothPlaying = activeBothSegment?.id == rec.id
                         )
@@ -4575,6 +4867,8 @@ fun JapaneseClickableSubtitle(text: String, onWordClicked: (String) -> Unit) {
 
 @Composable
 fun PitchOverline(reading: String, pitchPosition: Int) {
+    val textColor = MaterialTheme.colorScheme.onSurface
+    val annotationColor = MaterialTheme.colorScheme.onSurfaceVariant
     val morae = remember(reading) {
         val list = mutableListOf<String>()
         var i = 0
@@ -4601,24 +4895,25 @@ fun PitchOverline(reading: String, pitchPosition: Int) {
             val hasDrop = pitchPosition > 0 && i == pitchPosition - 1
 
             Box(contentAlignment = Alignment.TopStart) {
-                Text(mora, color = Color.White, fontSize = 20.sp)
+                Text(mora, color = textColor, fontSize = 20.sp)
                 androidx.compose.foundation.Canvas(modifier = Modifier.matchParentSize()) {
                     if (isHigh) {
-                        drawLine(Color.White, androidx.compose.ui.geometry.Offset(0f, 2.dp.toPx()), androidx.compose.ui.geometry.Offset(size.width, 2.dp.toPx()), 1.5.dp.toPx())
+                        drawLine(textColor, androidx.compose.ui.geometry.Offset(0f, 2.dp.toPx()), androidx.compose.ui.geometry.Offset(size.width, 2.dp.toPx()), 1.5.dp.toPx())
                     }
                     if (hasDrop) {
-                        drawLine(Color.White, androidx.compose.ui.geometry.Offset(size.width, 2.dp.toPx()), androidx.compose.ui.geometry.Offset(size.width, size.height * 0.6f), 1.5.dp.toPx())
+                        drawLine(textColor, androidx.compose.ui.geometry.Offset(size.width, 2.dp.toPx()), androidx.compose.ui.geometry.Offset(size.width, size.height * 0.6f), 1.5.dp.toPx())
                     }
                 }
             }
         }
         Spacer(Modifier.width(4.dp))
-        Text("[$pitchPosition]", color = Color.Gray, fontSize = 14.sp)
+        Text("[$pitchPosition]", color = annotationColor, fontSize = 14.sp)
     }
 }
 
 @Composable
 fun PitchDiagram(reading: String, pitchPosition: Int, modifier: Modifier = Modifier) {
+    val textColor = MaterialTheme.colorScheme.onSurface
     val morae = remember(reading) {
         val list = mutableListOf<String>()
         var i = 0
@@ -4635,7 +4930,6 @@ fun PitchDiagram(reading: String, pitchPosition: Int, modifier: Modifier = Modif
         list
     }
 
-    val textColor = Color.White
     val dotRadius = 4.dp
     val strokeWidth = 2.dp
     val moraWidth = 32.dp
@@ -4713,18 +5007,89 @@ fun PitchDiagram(reading: String, pitchPosition: Int, modifier: Modifier = Modif
 @Composable
 fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismiss: () -> Unit) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    val colorScheme = MaterialTheme.colorScheme
+    val maxSheetHeight = LocalConfiguration.current.screenHeightDp.dp * 0.88f
+    val resultsListState = rememberLazyListState()
+    var routeExpandedTopDragToSheet by remember { mutableStateOf(false) }
+    fun listIsAtTop(): Boolean {
+        return resultsListState.firstVisibleItemIndex == 0 &&
+            resultsListState.firstVisibleItemScrollOffset == 0
+    }
+    LaunchedEffect(
+        sheetState.currentValue,
+        resultsListState.firstVisibleItemIndex,
+        resultsListState.firstVisibleItemScrollOffset
+    ) {
+        if (sheetState.currentValue != SheetValue.Expanded || !listIsAtTop()) {
+            routeExpandedTopDragToSheet = false
+        }
+    }
+    val expandedTopDragRouter = remember(sheetState, resultsListState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(
+                available: Offset,
+                source: NestedScrollSource
+            ): Offset {
+                if (source != NestedScrollSource.UserInput) return Offset.Zero
+
+                if (available.y < 0f) {
+                    routeExpandedTopDragToSheet = false
+                    return Offset.Zero
+                }
+
+                val shouldRouteToSheet =
+                    available.y > 0f &&
+                        listIsAtTop() &&
+                        sheetState.currentValue == SheetValue.Expanded &&
+                        sheetState.targetValue == SheetValue.Expanded
+
+                if (!shouldRouteToSheet) {
+                    routeExpandedTopDragToSheet = false
+                    return Offset.Zero
+                }
+
+                val wasRouting = routeExpandedTopDragToSheet
+                routeExpandedTopDragToSheet = true
+                return if (wasRouting) Offset.Zero else Offset(x = 0f, y = available.y)
+            }
+
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                routeExpandedTopDragToSheet = false
+                return Velocity.Zero
+            }
+
+            override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
+                routeExpandedTopDragToSheet = false
+                return Velocity.Zero
+            }
+        }
+    }
+    val defaultFlingBehavior = ScrollableDefaults.flingBehavior()
+    val containTopBoundListFling = remember(resultsListState, defaultFlingBehavior) {
+        object : FlingBehavior {
+            override suspend fun ScrollScope.performFling(initialVelocity: Float): Float {
+                val startedAtTop = listIsAtTop()
+                val remainingVelocity = with(defaultFlingBehavior) {
+                    performFling(initialVelocity)
+                }
+                return if (!startedAtTop && listIsAtTop()) {
+                    0f
+                } else {
+                    remainingVelocity
+                }
+            }
+        }
+    }
     var results by remember { mutableStateOf<List<DictEntry>>(emptyList()) }
     var searchQuery by remember { mutableStateOf(query) }
     var isSearching by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) {
-        delay(50)
-        runCatching { sheetState.partialExpand() }
-    }
-
     LaunchedEffect(searchQuery) {
         isSearching = true
         results = engine.searchPrefixes(searchQuery)
+        if (resultsListState.firstVisibleItemIndex != 0 || resultsListState.firstVisibleItemScrollOffset != 0) {
+            resultsListState.scrollToItem(0)
+        }
         isSearching = false
     }
 
@@ -4732,20 +5097,33 @@ fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismis
         onDismiss()
     }
 
-    ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState, containerColor = Color(0xFF1E1E24)) {
-        Column(modifier = Modifier.fillMaxWidth().padding(16.dp).padding(bottom = 32.dp)) {
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        sheetGesturesEnabled = true,
+        dragHandle = { BottomSheetDefaults.DragHandle() },
+        containerColor = colorScheme.surface
+    ) {
+        Column(modifier = Modifier.fillMaxWidth().height(maxSheetHeight).padding(16.dp).padding(bottom = 32.dp)) {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
                 label = { Text("Search Dictionary") },
                 modifier = Modifier.fillMaxWidth(),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White, unfocusedTextColor = Color.White,
-                    focusedContainerColor = Color(0xFF2B2B36), unfocusedContainerColor = Color(0xFF2B2B36)
+                    focusedTextColor = colorScheme.onSurface,
+                    unfocusedTextColor = colorScheme.onSurface,
+                    focusedContainerColor = colorScheme.surface,
+                    unfocusedContainerColor = colorScheme.surface,
+                    focusedLabelColor = colorScheme.primary,
+                    unfocusedLabelColor = colorScheme.onSurfaceVariant,
+                    focusedBorderColor = colorScheme.primary,
+                    unfocusedBorderColor = colorScheme.onSurfaceVariant,
+                    cursorColor = colorScheme.primary
                 ),
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Default.Clear, contentDescription = "Clear") }
+                        IconButton(onClick = { searchQuery = "" }) { Icon(Icons.Default.Clear, contentDescription = "Clear", tint = colorScheme.onSurfaceVariant) }
                     }
                 }
             )
@@ -4755,13 +5133,33 @@ fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismis
             if (isSearching) {
                 CircularProgressIndicator(modifier = Modifier.align(Alignment.CenterHorizontally))
             } else if (results.isEmpty()) {
-                Text("No results found.", color = Color.Gray, modifier = Modifier.align(Alignment.CenterHorizontally))
+                Text("No results found.", color = colorScheme.onSurfaceVariant, modifier = Modifier.align(Alignment.CenterHorizontally))
             } else {
                 val grouped = results.groupBy { "${it.deinflected}|${it.reading}" }
-                LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    grouped.forEach { (_, groupEntries) ->
-                        item {
-                            DictGroupCard(groupEntries)
+                CompositionLocalProvider(LocalOverscrollFactory provides null) {
+                    LazyColumn(
+                        state = resultsListState,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .nestedScroll(expandedTopDragRouter)
+                            .pointerInput(Unit) {
+                                awaitEachGesture {
+                                    awaitFirstDown(requireUnconsumed = false)
+                                    do {
+                                        val event = awaitPointerEvent(PointerEventPass.Final)
+                                    } while (event.changes.any { it.pressed })
+                                    routeExpandedTopDragToSheet = false
+                                }
+                            },
+                        flingBehavior = containTopBoundListFling,
+                        userScrollEnabled = !routeExpandedTopDragToSheet,
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        grouped.forEach { (_, groupEntries) ->
+                            item {
+                                DictGroupCard(groupEntries)
+                            }
                         }
                     }
                 }
@@ -4773,21 +5171,23 @@ fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismis
 @Composable
 fun DictGroupCard(entries: List<DictEntry>) {
     val first = entries.first()
+    val colorScheme = MaterialTheme.colorScheme
+    val chipContainer = colorScheme.primary.copy(alpha = if (isSystemInDarkTheme()) 0.20f else 0.12f)
     Card(
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF2A2A35)),
+        colors = CardDefaults.cardColors(containerColor = colorScheme.surfaceVariant),
         shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(first.deinflected, fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Color.White)
+                Text(first.deinflected, fontSize = 28.sp, fontWeight = FontWeight.Bold, color = colorScheme.onSurface)
 
                 if (first.reading.isNotEmpty() && first.reading != first.deinflected) {
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
                         "【${first.reading}】",
                         fontSize = 18.sp,
-                        color = Color(0xFFAEB2FF),
+                        color = colorScheme.primary,
                         modifier = Modifier.padding(bottom = 4.dp)
                     )
                 }
@@ -4799,11 +5199,11 @@ fun DictGroupCard(entries: List<DictEntry>) {
                 pitchesByDict.forEach { (dictName, pitches) ->
                     Column(modifier = Modifier.padding(bottom = 8.dp)) {
                         Surface(
-                            color = Color(0xFF5E5CE6).copy(alpha = 0.2f),
+                            color = chipContainer,
                             shape = RoundedCornerShape(4.dp),
                             modifier = Modifier.padding(bottom = 8.dp)
                         ) {
-                            Text(dictName, color = Color(0xFFAEB2FF), fontSize = 11.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
+                            Text(dictName, color = colorScheme.primary, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp))
                         }
 
                         pitches.forEach { pitch ->
@@ -4820,58 +5220,136 @@ fun DictGroupCard(entries: List<DictEntry>) {
 
             val byDict = entries.groupBy { it.dictName }
             byDict.forEach { (dictName, dictEntries) ->
-                Surface(
-                    color = Color(0xFF5E5CE6).copy(alpha = 0.2f),
-                    shape = RoundedCornerShape(4.dp),
-                    modifier = Modifier.padding(vertical = 4.dp)
-                ) {
-                    Text(
-                        text = dictName,
-                        color = Color(0xFFAEB2FF),
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                    )
-                }
-
-                dictEntries.forEach { entry ->
-                    val processedDefinition = if (entry.definition.trim().startsWith("[") || entry.definition.trim().startsWith("{")) {
+                val processedDefinitions = dictEntries.map { entry ->
+                    if (entry.definition.trim().startsWith("[") || entry.definition.trim().startsWith("{")) {
                         convertStructuredToHtml(entry.definition)
                     } else {
                         entry.definition
                     }
-
-                    if (processedDefinition.contains("<")) {
-                        AndroidView(
-                            factory = { ctx ->
-                                android.webkit.WebView(ctx).apply {
-                                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                                    settings.apply {
-                                        allowFileAccess = false
-                                        javaScriptEnabled = false
-                                    }
-                                    val html = """
-                                        <html><head><style>
-                                        body { color: #D0D0D0; font-size: 15px; font-family: sans-serif;
-                                               background: transparent; margin: 0; padding: 0; }
-                                        a { color: #AEB2FF; text-decoration: none; } 
-                                        ul, ol { padding-left: 20px; margin-top: 4px; }
-                                        li { margin-bottom: 4px; }
-                                        ruby rt { font-size: 0.6em; color: #AEB2FF; }
-                                        </style></head><body>$processedDefinition</body></html>
-                                    """.trimIndent()
-                                    loadDataWithBaseURL(null, html, "text/html", "UTF-8", null)
-                                }
-                            },
-                            modifier = Modifier.fillMaxWidth().heightIn(min = 20.dp, max = 500.dp)
-                        )
-                    } else {
-                        Text(processedDefinition, color = Color.LightGray, fontSize = 15.sp, lineHeight = 22.sp, modifier = Modifier.padding(bottom = 8.dp))
-                    }
                 }
+                DictionaryEntrySection(
+                    dictName = dictName,
+                    processedDefinitions = processedDefinitions,
+                    chipContainer = chipContainer
+                )
                 Spacer(modifier = Modifier.height(8.dp))
             }
         }
     }
+}
+
+@Composable
+private fun DictionaryEntrySection(
+    dictName: String,
+    processedDefinitions: List<String>,
+    chipContainer: Color
+) {
+    var expanded by remember(dictName, processedDefinitions) { mutableStateOf(false) }
+    val colorScheme = MaterialTheme.colorScheme
+    val sourceText = remember(processedDefinitions) { dictionarySourcePlainText(processedDefinitions) }
+    val preview = remember(sourceText) { firstDictionaryDefinitionLine(sourceText) }
+    val expandable = remember(sourceText, preview) { isExpandableDictionarySource(sourceText, preview) }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(enabled = expandable) { expanded = !expanded }
+                .padding(vertical = 4.dp)
+        ) {
+            Surface(
+                color = chipContainer,
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Text(
+                    text = dictName,
+                    color = colorScheme.primary,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+            Spacer(modifier = Modifier.width(8.dp))
+            if (expanded) {
+                Spacer(modifier = Modifier.weight(1f))
+            } else {
+                Text(
+                    preview,
+                    color = colorScheme.onSurfaceVariant,
+                    fontSize = 14.sp,
+                    lineHeight = 20.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            if (expandable) {
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (expanded) "Collapse dictionary source" else "Expand dictionary source",
+                    tint = colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+        }
+
+        if (expanded && sourceText.isNotBlank()) {
+            Text(
+                sourceText,
+                color = colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                lineHeight = 20.sp,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp, bottom = 8.dp)
+            )
+        }
+    }
+}
+
+private fun dictionarySourcePlainText(processedDefinitions: List<String>): String {
+    return processedDefinitions
+        .asSequence()
+        .map { dictionaryDefinitionPlainText(it).trim() }
+        .filter { it.isNotBlank() }
+        .joinToString("\n\n")
+}
+
+private fun firstDictionaryDefinitionLine(sourceText: String): String {
+    return sourceText
+        .lineSequence()
+        .map { cleanDictionaryDefinitionLine(it) }
+        .firstOrNull { it.isNotBlank() }
+        ?.takeIf { it.isNotBlank() }
+        ?: "Definition"
+}
+
+private fun isExpandableDictionarySource(sourceText: String, preview: String): Boolean {
+    val nonBlankLines = sourceText
+        .lineSequence()
+        .map { cleanDictionaryDefinitionLine(it) }
+        .filter { it.isNotBlank() }
+        .toList()
+    val compactText = nonBlankLines.joinToString(" ")
+    return nonBlankLines.size > 1 ||
+        compactText.length > preview.length ||
+        compactText.length > 72
+}
+
+private fun dictionaryDefinitionPlainText(processedDefinition: String): String {
+    return if (processedDefinition.contains("<")) {
+        Html.fromHtml(processedDefinition, Html.FROM_HTML_MODE_LEGACY).toString()
+    } else {
+        processedDefinition
+    }.replace('\u00A0', ' ')
+}
+
+private fun cleanDictionaryDefinitionLine(line: String): String {
+    return line
+        .trim()
+        .trimStart('•', '・', '-')
+        .trim()
 }
 
 @Composable

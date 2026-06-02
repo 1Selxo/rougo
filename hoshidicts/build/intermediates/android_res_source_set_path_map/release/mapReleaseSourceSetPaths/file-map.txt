@@ -1,9 +1,0 @@
-de.manhhao.hoshi.hoshidicts-pngs-0 C:\Users\basel\MyApplication\hoshidicts\build\generated\res\pngs\release
-de.manhhao.hoshi.hoshidicts-updated_navigation_xml-1 C:\Users\basel\MyApplication\hoshidicts\build\generated\updated_navigation_xml\release
-de.manhhao.hoshi.hoshidicts-mergeReleaseResources-2 C:\Users\basel\MyApplication\hoshidicts\build\intermediates\incremental\release\mergeReleaseResources\merged.dir
-de.manhhao.hoshi.hoshidicts-mergeReleaseResources-3 C:\Users\basel\MyApplication\hoshidicts\build\intermediates\incremental\release\mergeReleaseResources\stripped.dir
-de.manhhao.hoshi.hoshidicts-release-4 C:\Users\basel\MyApplication\hoshidicts\build\intermediates\merged_res\release\mergeReleaseResources
-de.manhhao.hoshi.hoshidicts-release-5 C:\Users\basel\MyApplication\hoshidicts\build\intermediates\packaged_res\release\packageReleaseResources
-de.manhhao.hoshi.hoshidicts-main-6 C:\Users\basel\MyApplication\hoshidicts\src\main\res
-de.manhhao.hoshi.hoshidicts-release-7 C:\Users\basel\MyApplication\hoshidicts\src\release\res
-gradleHome-0 C:\Users\basel\.gradle

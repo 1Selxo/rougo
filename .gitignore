@@ -14,3 +14,8 @@
 .cxx
 local.properties
 app/Aud1/
+AGENTS.override.md
+PLANS.md
+BUILDING.md
+screenshots/
+/hoshidicts/build/
