@@ -92,6 +92,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.lifecycleScope
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import com.selxo.rougo.dictionary.DeinflectorRegistry
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -3337,6 +3338,7 @@ fun SettingsScreen(
     var manualUpdateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var noiseCancelEnabled by remember { mutableStateOf(engine.isNoiseCancellationEnabled()) }
+    var dictionaryTargetLanguage by remember { mutableStateOf(engine.getTargetLanguage()) }
     var preferredYoutubeResolution by remember {
         mutableStateOf(prefs.getString(PREF_YOUTUBE_RESOLUTION, DEFAULT_YOUTUBE_RESOLUTION) ?: DEFAULT_YOUTUBE_RESOLUTION)
     }
@@ -3352,6 +3354,7 @@ fun SettingsScreen(
     var subtitleOffsetSteps by remember {
         mutableIntStateOf((prefs.getLong(PREF_SUBTITLE_OFFSET_MS, DEFAULT_SUBTITLE_OFFSET_MS) / 250L).toInt().coerceIn(-20, 20))
     }
+    var showDictionaryLanguageMenu by remember { mutableStateOf(false) }
     var showYoutubeQualityMenu by remember { mutableStateOf(false) }
     var showYoutubeSubtitleLanguageMenu by remember { mutableStateOf(false) }
     var showThemeMenu by remember { mutableStateOf(false) }
@@ -3448,6 +3451,42 @@ fun SettingsScreen(
                     }
                     Spacer(Modifier.weight(1f))
                     Icon(Icons.Default.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Row(modifier = Modifier.padding(20.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Default.Translate, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(16.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Target Language", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onSurface)
+                        Text("Used for dictionary lookups", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                    }
+                    Box {
+                        TextButton(onClick = { showDictionaryLanguageMenu = true }) {
+                            Text(DeinflectorRegistry.languageOptions.firstOrNull { it.code == dictionaryTargetLanguage }?.label ?: "Japanese")
+                        }
+                        DropdownMenu(
+                            expanded = showDictionaryLanguageMenu,
+                            onDismissRequest = { showDictionaryLanguageMenu = false }
+                        ) {
+                            DeinflectorRegistry.languageOptions.forEach { option ->
+                                DropdownMenuItem(
+                                    text = { Text(option.label) },
+                                    onClick = {
+                                        dictionaryTargetLanguage = option.code
+                                        engine.setTargetLanguage(option.code)
+                                        showDictionaryLanguageMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
@@ -4830,6 +4869,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                     Box(modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
                     JapaneseClickableSubtitle(
                         text = currentSubtitleText,
+                        targetLanguage = dictionaryEngine.getTargetLanguage(),
                         onWordClicked = { clickedChunk ->
                             showDictQuery = clickedChunk
                             if (isPlaying) vlcPlayer.pause()

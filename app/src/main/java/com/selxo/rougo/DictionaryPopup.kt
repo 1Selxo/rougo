@@ -72,11 +72,20 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
 
+private const val MAX_RIGHT_CONTEXT_CHARS = 96
+private const val MAX_RIGHT_CONTEXT_WORDS = 12
+private val RIGHT_CONTEXT_LOOKUP_LANGUAGES = setOf("de", "en")
+
 @Composable
-fun JapaneseClickableSubtitle(text: String, onWordClicked: (String) -> Unit) {
+fun JapaneseClickableSubtitle(
+    text: String,
+    targetLanguage: String = "ja",
+    onWordClicked: (String) -> Unit
+) {
     var layoutResult by remember { mutableStateOf<TextLayoutResult?>(null) }
 
     Text(
@@ -88,19 +97,79 @@ fun JapaneseClickableSubtitle(text: String, onWordClicked: (String) -> Unit) {
         textAlign = TextAlign.Center,
         modifier = Modifier
             .padding(16.dp)
-            .pointerInput(text) {
+            .pointerInput(text, targetLanguage) {
                 detectTapGestures { pos ->
                     layoutResult?.let { layout ->
                         val offset = layout.getOffsetForPosition(pos)
                         if (offset < text.length) {
-                            val endIndex = minOf(text.length, offset + 8)
-                            onWordClicked(text.substring(offset, endIndex))
+                            val clickedText = extractDictionaryLookupText(text, offset, targetLanguage)
+                            if (clickedText.isNotBlank()) {
+                                onWordClicked(clickedText)
+                            }
                         }
                     }
                 }
             },
         onTextLayout = { layoutResult = it }
     )
+}
+
+internal fun extractDictionaryLookupText(
+    text: String,
+    offset: Int,
+    languageCode: String = "ja"
+): String {
+    if (text.isEmpty()) return ""
+    val safeOffset = offset.coerceIn(0, text.lastIndex)
+    val char = text[safeOffset]
+    if (isWordLookupChar(char) && !isCjkLookupChar(char)) {
+        var start = safeOffset
+        var end = safeOffset + 1
+        while (start > 0 && isWordLookupChar(text[start - 1])) start--
+        while (end < text.length && isWordLookupChar(text[end])) end++
+        if (languageCode.normalizedLookupLanguage() in RIGHT_CONTEXT_LOOKUP_LANGUAGES) {
+            end = rightContextEnd(text, end)
+        }
+        return text.substring(start, end)
+    }
+
+    val endIndex = minOf(text.length, safeOffset + 8)
+    return text.substring(safeOffset, endIndex)
+}
+
+private fun isWordLookupChar(char: Char): Boolean {
+    return char.isLetterOrDigit() || char == '\'' || char == '\u2019' || char == '-' || char == '\u2010' || char == '\u2011'
+}
+
+private fun rightContextEnd(text: String, initialEnd: Int): Int {
+    var end = initialEnd
+    var words = 1
+
+    while (end < text.length && end - initialEnd < MAX_RIGHT_CONTEXT_CHARS && words < MAX_RIGHT_CONTEXT_WORDS) {
+        val char = text[end]
+        if (char == '\n' || char == '\r' || char == '.' || char == '?' || char == '!' || char == ';' || char == ':') break
+        if (isWordLookupChar(char)) {
+            words++
+            while (end < text.length && isWordLookupChar(text[end])) end++
+        } else {
+            end++
+        }
+    }
+
+    return end
+}
+
+private fun String.normalizedLookupLanguage(): String {
+    return lowercase(Locale.ROOT).substringBefore('-').substringBefore('_')
+}
+
+private fun isCjkLookupChar(char: Char): Boolean {
+    return when (Character.UnicodeScript.of(char.code)) {
+        Character.UnicodeScript.HAN,
+        Character.UnicodeScript.HIRAGANA,
+        Character.UnicodeScript.KATAKANA -> true
+        else -> false
+    }
 }
 
 @Composable
