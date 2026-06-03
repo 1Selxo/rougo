@@ -15,8 +15,11 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -56,6 +59,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -68,9 +72,15 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
@@ -522,7 +532,7 @@ fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismis
                         ) {
                             grouped.forEach { (_, groupEntries) ->
                                 item {
-                                    DictGroupCard(groupEntries)
+                                    DictGroupCard(groupEntries, engine)
                                 }
                             }
                         }
@@ -534,7 +544,7 @@ fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismis
 }
 
 @Composable
-fun DictGroupCard(entries: List<DictEntry>) {
+fun DictGroupCard(entries: List<DictEntry>, engine: DictionaryEngine) {
     val first = entries.first()
     val colorScheme = MaterialTheme.colorScheme
     val chipContainer = colorScheme.primary.copy(alpha = if (isSystemInDarkTheme()) 0.20f else 0.12f)
@@ -586,16 +596,13 @@ fun DictGroupCard(entries: List<DictEntry>) {
 
             val byDict = entries.groupBy { it.dictName }
             byDict.forEach { (dictName, dictEntries) ->
-                val processedDefinitions = dictEntries.map { entry ->
-                    if (entry.definition.trim().startsWith("[") || entry.definition.trim().startsWith("{")) {
-                        convertStructuredToHtml(entry.definition)
-                    } else {
-                        entry.definition
-                    }
+                val nestedCollapseEnabled = remember(dictName) {
+                    engine.isDictionaryNestedCollapseEnabled(dictName)
                 }
                 DictionaryEntrySection(
                     dictName = dictName,
-                    processedDefinitions = processedDefinitions,
+                    entries = dictEntries,
+                    nestedCollapseEnabled = nestedCollapseEnabled,
                     chipContainer = chipContainer
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -607,12 +614,13 @@ fun DictGroupCard(entries: List<DictEntry>) {
 @Composable
 private fun DictionaryEntrySection(
     dictName: String,
-    processedDefinitions: List<String>,
+    entries: List<DictEntry>,
+    nestedCollapseEnabled: Boolean,
     chipContainer: Color
 ) {
-    var expanded by remember(dictName, processedDefinitions) { mutableStateOf(false) }
+    var expanded by remember(dictName, entries) { mutableStateOf(false) }
     val colorScheme = MaterialTheme.colorScheme
-    val sourceText = remember(processedDefinitions) { dictionarySourcePlainText(processedDefinitions) }
+    val sourceText = remember(entries) { dictionarySourcePlainText(entries.map { it.definition }) }
     val preview = remember(sourceText) { firstDictionaryDefinitionLine(sourceText) }
     val expandable = remember(sourceText, preview) { isExpandableDictionarySource(sourceText, preview) }
 
@@ -662,7 +670,8 @@ private fun DictionaryEntrySection(
 
         if (expanded && sourceText.isNotBlank()) {
             DictionaryDefinitionBody(
-                processedDefinitions = processedDefinitions,
+                entries = entries,
+                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -674,20 +683,509 @@ private fun DictionaryEntrySection(
 
 @Composable
 private fun DictionaryDefinitionBody(
-    processedDefinitions: List<String>,
+    entries: List<DictEntry>,
+    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
-    val definitions = remember(processedDefinitions) {
-        processedDefinitions.map { it.trim() }.filter { it.isNotBlank() }
+    val definitions = remember(entries) {
+        entries.filter { it.definition.trim().isNotBlank() }
     }
 
     Column(modifier = modifier) {
-        definitions.forEachIndexed { index, definition ->
-            if (index > 0) Spacer(modifier = Modifier.height(10.dp))
-            DictionaryHtmlText(definition = definition, color = color)
+        definitions.forEachIndexed { index, entry ->
+            val definition = entry.definition.trim()
+            val structuredNodes = remember(definition) { parseStructuredDefinition(definition) }
+            val displayTags = remember(entry.definitionTags, entry.termTags) { dictionaryEntryTags(entry) }
+
+            if (index > 0) Spacer(modifier = Modifier.height(12.dp))
+            if (displayTags.isNotEmpty()) {
+                DictionaryDefinitionTags(displayTags)
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+
+            if (structuredNodes != null) {
+                DictionaryStructuredContent(
+                    nodes = structuredNodes,
+                    nestedCollapseEnabled = nestedCollapseEnabled,
+                    color = color
+                )
+            } else {
+                val displayDefinition = if (definition.isStructuredJsonCandidate()) {
+                    convertStructuredToHtml(definition)
+                } else {
+                    definition
+                }
+                DictionaryHtmlText(definition = displayDefinition, color = color)
+            }
         }
     }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DictionaryDefinitionTags(tags: List<String>) {
+    val colorScheme = MaterialTheme.colorScheme
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        tags.forEach { tag ->
+            Surface(
+                color = colorScheme.inverseSurface.copy(alpha = if (isSystemInDarkTheme()) 0.72f else 0.82f),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Text(
+                    text = tag,
+                    color = colorScheme.inverseOnSurface,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryStructuredContent(
+    nodes: List<DictionaryNode>,
+    nestedCollapseEnabled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        nodes.forEach { node ->
+            DictionaryStructuredNode(
+                node = node,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color
+            )
+        }
+    }
+}
+
+@Composable
+private fun DictionaryStructuredNode(
+    node: DictionaryNode,
+    nestedCollapseEnabled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    when (node) {
+        is DictionaryTextNode -> {
+            val text = node.text.trim()
+            if (text.isNotBlank()) {
+                DictionaryInlineText(nodes = listOf(node), color = color, modifier = modifier)
+            }
+        }
+        is DictionaryElementNode -> when {
+            node.tag == "details" -> DictionaryDetailsBlock(
+                element = node,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color,
+                modifier = modifier
+            )
+            node.tag == "ol" -> DictionaryOrderedList(
+                element = node,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color,
+                modifier = modifier
+            )
+            node.tag == "ul" -> DictionaryUnorderedList(
+                element = node,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color,
+                modifier = modifier
+            )
+            node.dataContent == "example-sentence" -> DictionaryExampleSentence(
+                element = node,
+                color = color,
+                modifier = modifier
+            )
+            node.dataContent == "extra-info" -> DictionaryStructuredContent(
+                nodes = node.children,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color,
+                modifier = modifier.padding(start = 6.dp)
+            )
+            node.dataContent == "backlink" -> DictionaryBacklinkRow(element = node, modifier = modifier)
+            node.dataContent == "tags" -> DictionaryTagRow(nodes = node.children, modifier = modifier)
+            node.tag == "li" -> DictionaryGenericListItem(
+                element = node,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color,
+                modifier = modifier
+            )
+            node.tag == "br" -> Spacer(modifier = modifier.height(4.dp))
+            else -> DictionaryMixedBlock(
+                nodes = node.children,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color,
+                modifier = modifier
+            )
+        }
+    }
+}
+
+@Composable
+private fun DictionaryMixedBlock(
+    nodes: List<DictionaryNode>,
+    nestedCollapseEnabled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        val inlineBuffer = mutableListOf<DictionaryNode>()
+        nodes.forEach { child ->
+            if (child.isStandaloneDictionaryBlock()) {
+                if (inlineBuffer.any { dictionaryNodePlainText(it).isNotBlank() }) {
+                    DictionaryInlineText(nodes = inlineBuffer.toList(), color = color)
+                    inlineBuffer.clear()
+                }
+                DictionaryStructuredNode(
+                    node = child,
+                    nestedCollapseEnabled = nestedCollapseEnabled,
+                    color = color
+                )
+            } else {
+                inlineBuffer += child
+            }
+        }
+        if (inlineBuffer.any { dictionaryNodePlainText(it).isNotBlank() }) {
+            DictionaryInlineText(nodes = inlineBuffer.toList(), color = color)
+        }
+    }
+}
+
+@Composable
+private fun DictionaryDetailsBlock(
+    element: DictionaryElementNode,
+    nestedCollapseEnabled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val summary = element.children.firstOrNull {
+        it is DictionaryElementNode && it.tag == "summary"
+    } as? DictionaryElementNode
+    val summaryText = summary?.children?.let { dictionaryNodesPlainText(it) }?.trim()
+        ?.ifBlank { null }
+        ?: "Details"
+    val bodyNodes = element.children.filterNot { it === summary }
+    var expanded by remember(element) { mutableStateOf(element.open) }
+    val showBody = !nestedCollapseEnabled || expanded
+    val colorScheme = MaterialTheme.colorScheme
+    val isSectionSummary = summaryText.equals("Grammar", ignoreCase = true) ||
+        summaryText.equals("Etymology", ignoreCase = true)
+
+    Column(modifier = modifier.fillMaxWidth()) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(enabled = nestedCollapseEnabled) { expanded = !expanded }
+                .padding(horizontal = 2.dp, vertical = 3.dp)
+        ) {
+            Icon(
+                if (showBody) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (showBody) "Collapse $summaryText" else "Expand $summaryText",
+                tint = colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(Modifier.width(4.dp))
+            Text(
+                text = summaryText,
+                color = if (showBody) colorScheme.onSurface else colorScheme.onSurfaceVariant,
+                fontSize = 14.sp,
+                fontWeight = if (isSectionSummary) FontWeight.Bold else FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+
+        if (showBody && bodyNodes.isNotEmpty()) {
+            DictionaryStructuredContent(
+                nodes = bodyNodes,
+                nestedCollapseEnabled = nestedCollapseEnabled,
+                color = color,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 18.dp, top = 2.dp, bottom = 4.dp)
+            )
+        }
+    }
+}
+
+@Composable
+private fun DictionaryOrderedList(
+    element: DictionaryElementNode,
+    nestedCollapseEnabled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val items = element.children.filterIsInstance<DictionaryElementNode>().filter { it.tag == "li" }
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.forEachIndexed { index, item ->
+            if (element.dataContent == "glosses") {
+                DictionaryGlossListItem(
+                    item = item,
+                    index = index,
+                    nestedCollapseEnabled = nestedCollapseEnabled,
+                    color = color
+                )
+            } else {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    Text(
+                        text = "${index + 1}.",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 14.sp,
+                        modifier = Modifier.width(24.dp)
+                    )
+                    DictionaryStructuredContent(
+                        nodes = item.children,
+                        nestedCollapseEnabled = nestedCollapseEnabled,
+                        color = color,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryGlossListItem(
+    item: DictionaryElementNode,
+    index: Int,
+    nestedCollapseEnabled: Boolean,
+    color: Color
+) {
+    val contentNodes = item.singleChildElement("div")?.children ?: item.children
+    val tagNodes = contentNodes
+        .filterIsInstance<DictionaryElementNode>()
+        .filter { it.dataContent == "tags" }
+    val nonTagNodes = contentNodes.filterNot { it in tagNodes }
+    val firstBlockIndex = nonTagNodes.indexOfFirst { it.isSenseDetailBlock() }
+    val inlineNodes = if (firstBlockIndex == -1) nonTagNodes else nonTagNodes.take(firstBlockIndex)
+    val blockNodes = if (firstBlockIndex == -1) emptyList() else nonTagNodes.drop(firstBlockIndex)
+
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(
+            text = circledNumber(index + 1),
+            color = MaterialTheme.colorScheme.onSurface,
+            fontSize = 16.sp,
+            lineHeight = 20.sp,
+            modifier = Modifier.width(28.dp)
+        )
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            tagNodes.forEach { tagNode ->
+                DictionaryTagRow(nodes = tagNode.children)
+            }
+            if (inlineNodes.any { dictionaryNodePlainText(it).isNotBlank() }) {
+                DictionaryInlineText(
+                    nodes = inlineNodes,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 15.sp,
+                    lineHeight = 21.sp
+                )
+            }
+            blockNodes.forEach { block ->
+                DictionaryStructuredNode(
+                    node = block,
+                    nestedCollapseEnabled = nestedCollapseEnabled,
+                    color = color
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryUnorderedList(
+    element: DictionaryElementNode,
+    nestedCollapseEnabled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val items = element.children.filterIsInstance<DictionaryElementNode>().filter { it.tag == "li" }
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        items.forEach { item ->
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Text("•", color = color, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+                DictionaryStructuredContent(
+                    nodes = item.children,
+                    nestedCollapseEnabled = nestedCollapseEnabled,
+                    color = color,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryGenericListItem(
+    element: DictionaryElementNode,
+    nestedCollapseEnabled: Boolean,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text("•", color = color, fontSize = 14.sp, modifier = Modifier.width(18.dp))
+        DictionaryStructuredContent(
+            nodes = element.children,
+            nestedCollapseEnabled = nestedCollapseEnabled,
+            color = color,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun DictionaryTagRow(nodes: List<DictionaryNode>, modifier: Modifier = Modifier) {
+    val colorScheme = MaterialTheme.colorScheme
+    val tags = remember(nodes) {
+        nodes.map { dictionaryNodePlainText(it).trim() }.filter { it.isNotBlank() }
+    }
+    if (tags.isEmpty()) return
+
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = modifier.fillMaxWidth()
+    ) {
+        tags.forEach { tag ->
+            Surface(
+                color = colorScheme.inverseSurface.copy(alpha = if (isSystemInDarkTheme()) 0.72f else 0.82f),
+                shape = RoundedCornerShape(4.dp)
+            ) {
+                Text(
+                    text = tag,
+                    color = colorScheme.inverseOnSurface,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryExampleSentence(
+    element: DictionaryElementNode,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val colorScheme = MaterialTheme.colorScheme
+    Surface(
+        color = colorScheme.onSurface.copy(alpha = if (isSystemInDarkTheme()) 0.08f else 0.05f),
+        shape = RoundedCornerShape(6.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp, bottom = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .drawBehind {
+                    drawLine(
+                        color = colorScheme.onSurface.copy(alpha = 0.82f),
+                        start = Offset(0f, 0f),
+                        end = Offset(0f, size.height),
+                        strokeWidth = 3.dp.toPx()
+                    )
+                }
+                .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp)
+        ) {
+            element.children.filterIsInstance<DictionaryElementNode>().forEach { line ->
+                val lineColor = if (line.dataContent == "example-sentence-a") {
+                    colorScheme.onSurface
+                } else {
+                    color
+                }
+                DictionaryInlineText(
+                    nodes = line.children,
+                    color = lineColor,
+                    fontSize = when (line.dataContent) {
+                        "example-sentence-a" -> 16.sp
+                        "example-sentence-b" -> 13.sp
+                        else -> 12.sp
+                    },
+                    lineHeight = when (line.dataContent) {
+                        "example-sentence-a" -> 22.sp
+                        "example-sentence-b" -> 18.sp
+                        else -> 16.sp
+                    },
+                    italic = line.dataContent == "example-sentence-a",
+                    textAlign = if (line.dataContent == "example-sentence-c") TextAlign.End else TextAlign.Start,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryBacklinkRow(element: DictionaryElementNode, modifier: Modifier = Modifier) {
+    val uriHandler = LocalUriHandler.current
+    Row(
+        modifier = modifier.fillMaxWidth().padding(top = 2.dp),
+        horizontalArrangement = Arrangement.End,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        element.children.forEach { child ->
+            if (child is DictionaryElementNode && child.tag == "a") {
+                val linkText = dictionaryNodesPlainText(child.children).trim()
+                if (linkText.isNotBlank()) {
+                    Text(
+                        text = linkText,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 12.sp,
+                        textDecoration = TextDecoration.Underline,
+                        modifier = Modifier.clickable {
+                            runCatching { uriHandler.openUri(child.href.orEmpty()) }
+                        }
+                    )
+                }
+            } else {
+                val text = dictionaryNodePlainText(child)
+                if (text.isNotBlank()) {
+                    Text(text = text, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryInlineText(
+    nodes: List<DictionaryNode>,
+    color: Color,
+    modifier: Modifier = Modifier,
+    fontSize: androidx.compose.ui.unit.TextUnit = 14.sp,
+    lineHeight: androidx.compose.ui.unit.TextUnit = 20.sp,
+    italic: Boolean = false,
+    textAlign: TextAlign = TextAlign.Start
+) {
+    val text = remember(nodes, color, italic) {
+        dictionaryAnnotatedText(nodes, color, italic)
+    }
+    if (text.text.isBlank()) return
+
+    Text(
+        text = text,
+        color = color,
+        fontSize = fontSize,
+        lineHeight = lineHeight,
+        textAlign = textAlign,
+        modifier = modifier.fillMaxWidth()
+    )
 }
 
 @Composable
@@ -713,6 +1211,197 @@ private fun DictionaryHtmlText(
             textView.text = dictionaryDefinitionDisplayText(definition)
         }
     )
+}
+
+private sealed class DictionaryNode
+
+private data class DictionaryTextNode(val text: String) : DictionaryNode()
+
+private data class DictionaryElementNode(
+    val tag: String,
+    val dataContent: String?,
+    val dataCategory: String?,
+    val title: String?,
+    val href: String?,
+    val open: Boolean,
+    val children: List<DictionaryNode>
+) : DictionaryNode()
+
+private fun parseStructuredDefinition(definition: String): List<DictionaryNode>? {
+    val trimmed = definition.trim()
+    if (!trimmed.isStructuredJsonCandidate()) return null
+
+    return try {
+        val root = if (trimmed.startsWith("[")) JSONArray(trimmed) else JSONObject(trimmed)
+        parseDictionaryNodes(root).takeIf { dictionaryNodesPlainText(it).isNotBlank() }
+    } catch (e: Exception) {
+        null
+    }
+}
+
+private fun parseDictionaryNodes(node: Any?): List<DictionaryNode> {
+    return when (node) {
+        null, JSONObject.NULL -> emptyList()
+        is String -> listOf(DictionaryTextNode(node))
+        is JSONArray -> buildList {
+            for (i in 0 until node.length()) {
+                addAll(parseDictionaryNodes(node.opt(i)))
+            }
+        }
+        is JSONObject -> {
+            val type = node.optString("type")
+            if (type == "structured-content") {
+                parseDictionaryNodes(node.opt("content"))
+            } else {
+                val data = node.optJSONObject("data")
+                listOf(
+                    DictionaryElementNode(
+                        tag = node.optString("tag"),
+                        dataContent = data?.optString("content")?.takeIf { it.isNotBlank() },
+                        dataCategory = data?.optString("category")?.takeIf { it.isNotBlank() },
+                        title = node.optString("title").takeIf { it.isNotBlank() },
+                        href = node.optString("href").takeIf { it.isNotBlank() },
+                        open = when {
+                            !node.has("open") -> false
+                            node.opt("open") is Boolean -> node.optBoolean("open", false)
+                            else -> true
+                        },
+                        children = parseDictionaryNodes(node.opt("content"))
+                    )
+                )
+            }
+        }
+        else -> listOf(DictionaryTextNode(node.toString()))
+    }
+}
+
+private fun dictionaryEntryTags(entry: DictEntry): List<String> {
+    return "${entry.definitionTags} ${entry.termTags}"
+        .split(Regex("\\s+"))
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .distinct()
+}
+
+private fun dictionaryAnnotatedText(
+    nodes: List<DictionaryNode>,
+    color: Color,
+    italic: Boolean
+): AnnotatedString {
+    return buildAnnotatedString {
+        nodes.forEach { node ->
+            appendDictionaryNode(node, color = color, bold = false, italic = italic, link = false)
+        }
+    }
+}
+
+private fun AnnotatedString.Builder.appendDictionaryNode(
+    node: DictionaryNode,
+    color: Color,
+    bold: Boolean,
+    italic: Boolean,
+    link: Boolean
+) {
+    when (node) {
+        is DictionaryTextNode -> {
+            val style = SpanStyle(
+                color = color,
+                fontWeight = if (bold) FontWeight.Bold else null,
+                fontStyle = if (italic) FontStyle.Italic else null,
+                textDecoration = if (link) TextDecoration.Underline else null
+            )
+            pushStyle(style)
+            append(node.text.replace('\u00A0', ' '))
+            pop()
+        }
+        is DictionaryElementNode -> {
+            val nextBold = bold ||
+                node.tag == "b" ||
+                node.tag == "strong" ||
+                node.dataContent == "bold-text"
+            val nextItalic = italic || node.tag == "i" || node.tag == "em"
+            val nextLink = link || node.tag == "a"
+            node.children.forEach { child ->
+                appendDictionaryNode(
+                    node = child,
+                    color = color,
+                    bold = nextBold,
+                    italic = nextItalic,
+                    link = nextLink
+                )
+            }
+        }
+    }
+}
+
+private fun DictionaryNode.isStandaloneDictionaryBlock(): Boolean {
+    return this is DictionaryElementNode && (
+        tag == "details" ||
+            tag == "ol" ||
+            tag == "ul" ||
+            tag == "li" ||
+            dataContent == "preamble" ||
+            dataContent == "tags" ||
+            dataContent == "example-sentence" ||
+            dataContent == "extra-info" ||
+            dataContent == "backlink" ||
+            dataContent == "synonyms"
+        )
+}
+
+private fun DictionaryNode.isSenseDetailBlock(): Boolean {
+    return this is DictionaryElementNode && (
+        tag == "details" ||
+            tag == "ol" ||
+            tag == "ul" ||
+            dataContent == "example-sentence" ||
+            dataContent == "extra-info" ||
+            dataContent == "backlink" ||
+            dataContent == "synonyms"
+        )
+}
+
+private fun DictionaryElementNode.singleChildElement(tagName: String): DictionaryElementNode? {
+    return (children.singleOrNull() as? DictionaryElementNode)
+        ?.takeIf { it.tag == tagName }
+}
+
+private fun dictionaryNodesPlainText(nodes: List<DictionaryNode>): String {
+    return buildString {
+        nodes.forEach { appendDictionaryPlainText(it) }
+    }.replace('\u00A0', ' ')
+}
+
+private fun dictionaryNodePlainText(node: DictionaryNode): String {
+    return buildString { appendDictionaryPlainText(node) }.replace('\u00A0', ' ')
+}
+
+private fun StringBuilder.appendDictionaryPlainText(node: DictionaryNode) {
+    when (node) {
+        is DictionaryTextNode -> append(node.text)
+        is DictionaryElementNode -> {
+            val isBlock = node.tag in setOf("div", "p", "li", "ol", "ul", "details", "summary")
+            if (isBlock && isNotEmpty() && last() != '\n') append('\n')
+            node.children.forEach { appendDictionaryPlainText(it) }
+            if (isBlock && isNotEmpty() && last() != '\n') append('\n')
+        }
+    }
+}
+
+private fun circledNumber(number: Int): String {
+    val circled = listOf(
+        "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
+        "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳",
+        "㉑", "㉒", "㉓", "㉔", "㉕", "㉖", "㉗", "㉘", "㉙", "㉚",
+        "㉛", "㉜", "㉝", "㉞", "㉟", "㊱", "㊲", "㊳", "㊴", "㊵",
+        "㊶", "㊷", "㊸", "㊹", "㊺", "㊻", "㊼", "㊽", "㊾", "㊿"
+    )
+    return circled.getOrNull(number - 1) ?: "$number."
+}
+
+private fun String.isStructuredJsonCandidate(): Boolean {
+    val trimmed = trim()
+    return trimmed.startsWith("[") || trimmed.startsWith("{")
 }
 
 private fun splitJapaneseMorae(reading: String): List<String> {
@@ -761,7 +1450,10 @@ private fun isExpandableDictionarySource(sourceText: String, preview: String): B
 }
 
 private fun dictionaryDefinitionPlainText(processedDefinition: String): String {
-    return if (processedDefinition.contains("<")) {
+    val structuredNodes = parseStructuredDefinition(processedDefinition)
+    return if (structuredNodes != null) {
+        dictionaryNodesPlainText(structuredNodes)
+    } else if (processedDefinition.contains("<")) {
         Html.fromHtml(processedDefinition, Html.FROM_HTML_MODE_LEGACY).toString()
     } else {
         processedDefinition

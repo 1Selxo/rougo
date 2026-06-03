@@ -24,6 +24,8 @@ data class DictEntry(
     val reading: String,
     val definition: String,
     val dictName: String,
+    val definitionTags: String = "",
+    val termTags: String = "",
     val pitchPositions: List<PitchInfo> = emptyList()
 )
 
@@ -68,6 +70,14 @@ class DictionaryEngine private constructor(private val context: Context) {
 
     fun isNoiseCancellationEnabled(): Boolean = prefs.getBoolean("noise_cancel", false)
     fun setNoiseCancellationEnabled(enabled: Boolean) = prefs.edit { putBoolean("noise_cancel", enabled) }
+
+    fun isDictionaryNestedCollapseEnabled(dictName: String): Boolean {
+        return prefs.getBoolean(dictionaryNestedCollapseKey(dictName), true)
+    }
+
+    fun setDictionaryNestedCollapseEnabled(dictName: String, enabled: Boolean) {
+        prefs.edit { putBoolean(dictionaryNestedCollapseKey(dictName), enabled) }
+    }
 
     fun getTargetLanguage(): String {
         val saved = prefs.getString("target_language", DeinflectorRegistry.DEFAULT_LANGUAGE)
@@ -201,6 +211,7 @@ class DictionaryEngine private constructor(private val context: Context) {
 
     fun deleteDict(name: String) {
         File(dictsDir, name).deleteRecursively()
+        prefs.edit { remove(dictionaryNestedCollapseKey(name)) }
         loadDictionaries()
     }
 
@@ -351,9 +362,15 @@ class DictionaryEngine private constructor(private val context: Context) {
                 reading = term.reading,
                 definition = glossary.glossary,
                 dictName = glossary.dictName,
+                definitionTags = glossary.definitionTags,
+                termTags = glossary.termTags,
                 pitchPositions = allPitches
             )
         }
+    }
+
+    private fun dictionaryNestedCollapseKey(dictName: String): String {
+        return "dict_nested_collapse_$dictName"
     }
 
     private fun sortedDictionaryFolders(): List<File> {

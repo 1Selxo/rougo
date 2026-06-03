@@ -3716,6 +3716,9 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
     var dictOrder by remember { mutableStateOf(engine.getDictOrder()) }
     var importStatus by remember { mutableStateOf("") }
     var isImporting by remember { mutableStateOf(false) }
+    var nestedCollapseByDict by remember(installedDicts) {
+        mutableStateOf(installedDicts.associateWith { engine.isDictionaryNestedCollapseEnabled(it) })
+    }
 
     val sortedDicts = remember(installedDicts, dictOrder) {
         installedDicts.sortedBy { name ->
@@ -3792,27 +3795,49 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(sortedDicts) { dictName ->
+                        val nestedCollapsesEnabled = nestedCollapseByDict[dictName] ?: true
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
-                            Row(modifier = Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                Spacer(Modifier.width(12.dp))
-                                Text(dictName, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
+                            Column(modifier = Modifier.padding(16.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Book, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Spacer(Modifier.width(12.dp))
+                                    Text(dictName, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.onSurface, modifier = Modifier.weight(1f))
 
-                                Row {
-                                    IconButton(onClick = { moveDict(dictName, true) }, enabled = sortedDicts.indexOf(dictName) > 0) {
-                                        Icon(Icons.Default.ArrowUpward, contentDescription = "Move Up", tint = if (sortedDicts.indexOf(dictName) > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant)
+                                    Row {
+                                        IconButton(onClick = { moveDict(dictName, true) }, enabled = sortedDicts.indexOf(dictName) > 0) {
+                                            Icon(Icons.Default.ArrowUpward, contentDescription = "Move Up", tint = if (sortedDicts.indexOf(dictName) > 0) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant)
+                                        }
+                                        IconButton(onClick = { moveDict(dictName, false) }, enabled = sortedDicts.indexOf(dictName) < sortedDicts.size - 1) {
+                                            Icon(Icons.Default.ArrowDownward, contentDescription = "Move Down", tint = if (sortedDicts.indexOf(dictName) < sortedDicts.size - 1) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant)
+                                        }
+                                        IconButton(onClick = {
+                                            engine.deleteDict(dictName)
+                                            installedDicts = engine.getInstalledDictionaries()
+                                        }) {
+                                            Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
                                     }
-                                    IconButton(onClick = { moveDict(dictName, false) }, enabled = sortedDicts.indexOf(dictName) < sortedDicts.size - 1) {
-                                        Icon(Icons.Default.ArrowDownward, contentDescription = "Move Down", tint = if (sortedDicts.indexOf(dictName) < sortedDicts.size - 1) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.surfaceVariant)
-                                    }
-                                    IconButton(onClick = {
-                                        engine.deleteDict(dictName)
-                                        installedDicts = engine.getInstalledDictionaries()
-                                    }) {
-                                        Icon(Icons.Default.Delete, contentDescription = "Delete", tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        "Nested collapses",
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Switch(
+                                        checked = nestedCollapsesEnabled,
+                                        onCheckedChange = { enabled ->
+                                            engine.setDictionaryNestedCollapseEnabled(dictName, enabled)
+                                            nestedCollapseByDict = nestedCollapseByDict + (dictName to enabled)
+                                        }
+                                    )
                                 }
                             }
                         }
