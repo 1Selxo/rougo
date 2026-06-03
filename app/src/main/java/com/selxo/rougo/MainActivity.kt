@@ -3831,6 +3831,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     val prefs = remember { context.getSharedPreferences("app_prefs", Context.MODE_PRIVATE) }
     val dictionaryEngine = remember { DictionaryEngine.getInstance(context) }
     var showDictQuery by remember { mutableStateOf<String?>(null) }
+    var resumePlaybackAfterDictionaryDismiss by remember { mutableStateOf(false) }
     val uiScope = rememberCoroutineScope()
     val skipSeconds = remember { prefs.getInt(PREF_SKIP_SECONDS, DEFAULT_SKIP_SECONDS).coerceIn(1, 30) }
     val skipDurationMs = skipSeconds * 1000L
@@ -3921,6 +3922,25 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
             isPlaying = true
         } catch (e: Exception) {
             e.printStackTrace()
+        }
+    }
+
+    fun openDictionaryLookup(query: String) {
+        val shouldResumeAfterDismiss = isPlaying || vlcPlayer.isPlaying
+        resumePlaybackAfterDictionaryDismiss = shouldResumeAfterDismiss
+        showDictQuery = query
+        if (shouldResumeAfterDismiss) {
+            try { vlcPlayer.pause() } catch (e: Exception) {}
+            isPlaying = false
+        }
+    }
+
+    fun dismissDictionaryLookup() {
+        val shouldResumeAfterDismiss = resumePlaybackAfterDictionaryDismiss
+        showDictQuery = null
+        resumePlaybackAfterDictionaryDismiss = false
+        if (shouldResumeAfterDismiss && actualMediaUri != null && !vlcPlayer.isPlaying) {
+            playMainPlayer()
         }
     }
 
@@ -4687,8 +4707,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                         text = currentSubtitleText,
                         targetLanguage = dictionaryEngine.getTargetLanguage(),
                         onWordClicked = { clickedChunk ->
-                            showDictQuery = clickedChunk
-                            if (isPlaying) vlcPlayer.pause()
+                            openDictionaryLookup(clickedChunk)
                         }
                     )
                 }
@@ -4882,7 +4901,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         HoshiDictionaryBottomSheet(
             query = showDictQuery!!,
             engine = dictionaryEngine,
-            onDismiss = { showDictQuery = null }
+            onDismiss = { dismissDictionaryLookup() }
         )
     }
 
