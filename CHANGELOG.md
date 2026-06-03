@@ -1,5 +1,10 @@
 # Changelog
 
+## V2.7 - 2026-06-03
+
+- Fixed symlink resolution for improved Windows and CI compatibility.
+- Bumped SDK and build tool dependencies.
+
 ## V2.5 - 2026-06-03
 
 - Stabilized dictionary and playback flows.
