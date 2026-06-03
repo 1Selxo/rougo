@@ -1,5 +1,11 @@
 # Changelog
 
+## V2.7.1 - 2026-06-03
+
+- Improved dictionary lookup with popup UI enhancements.
+- Added French language support with dedicated deinflector and preprocessors.
+- Included unit tests for dictionary lookup verification.
+
 ## V2.7 - 2026-06-03
 
 - Fixed symlink resolution for improved Windows and CI compatibility.
