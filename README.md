@@ -60,7 +60,7 @@ app/build/outputs/apk/release/
 
 ## Releases
 
-GitHub Actions builds release APKs from version tags such as `V2.4`. The published release includes separate APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
+GitHub Actions builds release APKs from version tags such as `V2.6`. The published release includes separate APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
 
 ## License
 
