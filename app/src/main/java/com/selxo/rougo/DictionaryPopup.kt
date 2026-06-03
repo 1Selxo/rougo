@@ -38,6 +38,8 @@ import androidx.compose.material3.BottomSheetDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -48,6 +50,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.SheetValue
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -85,6 +88,7 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.selxo.rougo.dictionary.DeinflectorRegistry
 import java.util.Locale
 import org.json.JSONArray
 import org.json.JSONObject
@@ -451,8 +455,13 @@ fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismis
     var results by remember { mutableStateOf<List<DictEntry>>(emptyList()) }
     var searchQuery by remember { mutableStateOf(query) }
     var isSearching by remember { mutableStateOf(false) }
+    var targetLanguage by remember { mutableStateOf(engine.getTargetLanguage()) }
+    var showTargetLanguageMenu by remember { mutableStateOf(false) }
+    val targetLanguageCode = remember(targetLanguage) {
+        DeinflectorRegistry.normalize(targetLanguage).uppercase(Locale.ROOT).take(2)
+    }
 
-    LaunchedEffect(searchQuery) {
+    LaunchedEffect(searchQuery, targetLanguage) {
         isSearching = true
         results = engine.searchPrefixes(searchQuery)
         if (resultsListState.firstVisibleItemIndex != 0 || resultsListState.firstVisibleItemScrollOffset != 0) {
@@ -490,9 +499,35 @@ fun HoshiDictionaryBottomSheet(query: String, engine: DictionaryEngine, onDismis
                     cursorColor = colorScheme.primary
                 ),
                 trailingIcon = {
-                    if (searchQuery.isNotEmpty()) {
-                        IconButton(onClick = { searchQuery = "" }) {
-                            Icon(Icons.Default.Clear, contentDescription = "Clear", tint = colorScheme.onSurfaceVariant)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear", tint = colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Box {
+                            TextButton(onClick = { showTargetLanguageMenu = true }) {
+                                Text(
+                                    targetLanguageCode,
+                                    color = colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = showTargetLanguageMenu,
+                                onDismissRequest = { showTargetLanguageMenu = false }
+                            ) {
+                                DeinflectorRegistry.languageOptions.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        onClick = {
+                                            targetLanguage = option.code
+                                            engine.setTargetLanguage(option.code)
+                                            showTargetLanguageMenu = false
+                                        }
+                                    )
+                                }
+                            }
                         }
                     }
                 }
