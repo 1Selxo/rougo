@@ -1,3 +1,6 @@
-[submodule "hoshidicts"]
-	path = hoshidicts
-	url = https://github.com/kaihouguide/rougo.git
+[submodule "hoshidicts-core"]
+	path = hoshidicts/submodules/hoshidicts
+	url = https://github.com/Manhhao/hoshidicts
+[submodule "hoshidicts-kotlin-bridge"]
+	path = hoshidicts/submodules/hoshidicts-kotlin-bridge
+	url = https://github.com/Manhhao/hoshidicts-kotlin-bridge
