@@ -71,12 +71,18 @@ class DictionaryEngine private constructor(private val context: Context) {
     fun isNoiseCancellationEnabled(): Boolean = prefs.getBoolean("noise_cancel", false)
     fun setNoiseCancellationEnabled(enabled: Boolean) = prefs.edit { putBoolean("noise_cancel", enabled) }
 
-    fun isDictionaryNestedCollapseEnabled(dictName: String): Boolean {
-        return prefs.getBoolean(dictionaryNestedCollapseKey(dictName), true)
+    fun isDictionaryBlockCollapseEnabled(dictName: String): Boolean {
+        return prefs.getBoolean(
+            dictionaryBlockCollapseKey(dictName),
+            prefs.getBoolean(dictionaryNestedCollapseKey(dictName), true)
+        )
     }
 
-    fun setDictionaryNestedCollapseEnabled(dictName: String, enabled: Boolean) {
-        prefs.edit { putBoolean(dictionaryNestedCollapseKey(dictName), enabled) }
+    fun setDictionaryBlockCollapseEnabled(dictName: String, enabled: Boolean) {
+        prefs.edit {
+            putBoolean(dictionaryBlockCollapseKey(dictName), enabled)
+            remove(dictionaryNestedCollapseKey(dictName))
+        }
     }
 
     fun getTargetLanguage(): String {
@@ -211,7 +217,10 @@ class DictionaryEngine private constructor(private val context: Context) {
 
     fun deleteDict(name: String) {
         File(dictsDir, name).deleteRecursively()
-        prefs.edit { remove(dictionaryNestedCollapseKey(name)) }
+        prefs.edit {
+            remove(dictionaryBlockCollapseKey(name))
+            remove(dictionaryNestedCollapseKey(name))
+        }
         loadDictionaries()
     }
 
@@ -369,9 +378,8 @@ class DictionaryEngine private constructor(private val context: Context) {
         }
     }
 
-    private fun dictionaryNestedCollapseKey(dictName: String): String {
-        return "dict_nested_collapse_$dictName"
-    }
+    private fun dictionaryBlockCollapseKey(dictName: String): String = "dict_block_collapse_$dictName"
+    private fun dictionaryNestedCollapseKey(dictName: String): String = "dict_nested_collapse_$dictName"
 
     private fun sortedDictionaryFolders(): List<File> {
         val allFolders = dictsDir.listFiles()?.filter { it.isDirectory } ?: emptyList()

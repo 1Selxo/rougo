@@ -59,7 +59,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -596,13 +595,13 @@ fun DictGroupCard(entries: List<DictEntry>, engine: DictionaryEngine) {
 
             val byDict = entries.groupBy { it.dictName }
             byDict.forEach { (dictName, dictEntries) ->
-                val nestedCollapseEnabled = remember(dictName) {
-                    engine.isDictionaryNestedCollapseEnabled(dictName)
+                val blockCollapseEnabled = remember(dictName) {
+                    engine.isDictionaryBlockCollapseEnabled(dictName)
                 }
                 DictionaryEntrySection(
                     dictName = dictName,
                     entries = dictEntries,
-                    nestedCollapseEnabled = nestedCollapseEnabled,
+                    blockCollapseEnabled = blockCollapseEnabled,
                     chipContainer = chipContainer
                 )
                 Spacer(modifier = Modifier.height(8.dp))
@@ -615,7 +614,7 @@ fun DictGroupCard(entries: List<DictEntry>, engine: DictionaryEngine) {
 private fun DictionaryEntrySection(
     dictName: String,
     entries: List<DictEntry>,
-    nestedCollapseEnabled: Boolean,
+    blockCollapseEnabled: Boolean,
     chipContainer: Color
 ) {
     var expanded by remember(dictName, entries) { mutableStateOf(false) }
@@ -623,6 +622,8 @@ private fun DictionaryEntrySection(
     val sourceText = remember(entries) { dictionarySourcePlainText(entries.map { it.definition }) }
     val preview = remember(sourceText) { firstDictionaryDefinitionLine(sourceText) }
     val expandable = remember(sourceText, preview) { isExpandableDictionarySource(sourceText, preview) }
+    val blockCanCollapse = blockCollapseEnabled && expandable
+    val showBody = !blockCollapseEnabled || expanded
 
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(
@@ -630,7 +631,7 @@ private fun DictionaryEntrySection(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = expandable) { expanded = !expanded }
+                .clickable(enabled = blockCanCollapse) { expanded = !expanded }
                 .padding(vertical = 4.dp)
         ) {
             Surface(
@@ -645,7 +646,7 @@ private fun DictionaryEntrySection(
                 )
             }
             Spacer(modifier = Modifier.width(8.dp))
-            if (expanded) {
+            if (showBody) {
                 Spacer(modifier = Modifier.weight(1f))
             } else {
                 Text(
@@ -658,7 +659,7 @@ private fun DictionaryEntrySection(
                     modifier = Modifier.weight(1f)
                 )
             }
-            if (expandable) {
+            if (blockCanCollapse) {
                 Icon(
                     if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
                     contentDescription = if (expanded) "Collapse dictionary source" else "Expand dictionary source",
@@ -668,10 +669,9 @@ private fun DictionaryEntrySection(
             }
         }
 
-        if (expanded && sourceText.isNotBlank()) {
+        if (showBody && sourceText.isNotBlank()) {
             DictionaryDefinitionBody(
                 entries = entries,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = colorScheme.onSurfaceVariant,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -684,7 +684,6 @@ private fun DictionaryEntrySection(
 @Composable
 private fun DictionaryDefinitionBody(
     entries: List<DictEntry>,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -707,7 +706,6 @@ private fun DictionaryDefinitionBody(
             if (structuredNodes != null) {
                 DictionaryStructuredContent(
                     nodes = structuredNodes,
-                    nestedCollapseEnabled = nestedCollapseEnabled,
                     color = color
                 )
             } else {
@@ -725,33 +723,38 @@ private fun DictionaryDefinitionBody(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DictionaryDefinitionTags(tags: List<String>) {
-    val colorScheme = MaterialTheme.colorScheme
     FlowRow(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         tags.forEach { tag ->
-            Surface(
-                color = colorScheme.inverseSurface.copy(alpha = if (isSystemInDarkTheme()) 0.72f else 0.82f),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                Text(
-                    text = tag,
-                    color = colorScheme.inverseOnSurface,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                )
-            }
+            DictionaryTagChip(tag = tag)
         }
+    }
+}
+
+@Composable
+private fun DictionaryTagChip(tag: String, modifier: Modifier = Modifier) {
+    val colorScheme = MaterialTheme.colorScheme
+    Surface(
+        color = colorScheme.inverseSurface.copy(alpha = if (isSystemInDarkTheme()) 0.72f else 0.82f),
+        shape = RoundedCornerShape(4.dp),
+        modifier = modifier
+    ) {
+        Text(
+            text = tag,
+            color = colorScheme.inverseOnSurface,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+        )
     }
 }
 
 @Composable
 private fun DictionaryStructuredContent(
     nodes: List<DictionaryNode>,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -762,7 +765,6 @@ private fun DictionaryStructuredContent(
         nodes.forEach { node ->
             DictionaryStructuredNode(
                 node = node,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = color
             )
         }
@@ -772,7 +774,6 @@ private fun DictionaryStructuredContent(
 @Composable
 private fun DictionaryStructuredNode(
     node: DictionaryNode,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -784,32 +785,29 @@ private fun DictionaryStructuredNode(
             }
         }
         is DictionaryElementNode -> when {
+            node.shouldHideInCompactDictionaryEntry() -> Unit
+            node.isGrammarDetails() -> DictionaryGrammarLine(
+                element = node,
+                color = color,
+                modifier = modifier
+            )
             node.tag == "details" -> DictionaryDetailsBlock(
                 element = node,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = color,
                 modifier = modifier
             )
             node.tag == "ol" -> DictionaryOrderedList(
                 element = node,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = color,
                 modifier = modifier
             )
             node.tag == "ul" -> DictionaryUnorderedList(
-                element = node,
-                nestedCollapseEnabled = nestedCollapseEnabled,
-                color = color,
-                modifier = modifier
-            )
-            node.dataContent == "example-sentence" -> DictionaryExampleSentence(
                 element = node,
                 color = color,
                 modifier = modifier
             )
             node.dataContent == "extra-info" -> DictionaryStructuredContent(
                 nodes = node.children,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = color,
                 modifier = modifier.padding(start = 6.dp)
             )
@@ -817,14 +815,12 @@ private fun DictionaryStructuredNode(
             node.dataContent == "tags" -> DictionaryTagRow(nodes = node.children, modifier = modifier)
             node.tag == "li" -> DictionaryGenericListItem(
                 element = node,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = color,
                 modifier = modifier
             )
             node.tag == "br" -> Spacer(modifier = modifier.height(4.dp))
             else -> DictionaryMixedBlock(
                 nodes = node.children,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = color,
                 modifier = modifier
             )
@@ -835,7 +831,6 @@ private fun DictionaryStructuredNode(
 @Composable
 private fun DictionaryMixedBlock(
     nodes: List<DictionaryNode>,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -849,7 +844,6 @@ private fun DictionaryMixedBlock(
                 }
                 DictionaryStructuredNode(
                     node = child,
-                    nestedCollapseEnabled = nestedCollapseEnabled,
                     color = color
                 )
             } else {
@@ -863,9 +857,44 @@ private fun DictionaryMixedBlock(
 }
 
 @Composable
+private fun DictionaryGrammarLine(
+    element: DictionaryElementNode,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val summary = element.children.firstOrNull {
+        it is DictionaryElementNode && it.tag == "summary"
+    } as? DictionaryElementNode
+    val summaryText = summary?.children?.let { dictionaryNodesPlainText(it) }?.trim()
+        ?.ifBlank { null }
+        ?: "Grammar"
+    val bodyText = element.children
+        .filterNot { it === summary }
+        .let { dictionaryNodesPlainText(it) }
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+        .joinToString(" ")
+    if (bodyText.isBlank()) return
+
+    Text(
+        text = buildAnnotatedString {
+            pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
+            append(summaryText)
+            append(": ")
+            pop()
+            append(bodyText)
+        },
+        color = color,
+        fontSize = 13.sp,
+        lineHeight = 18.sp,
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+@Composable
 private fun DictionaryDetailsBlock(
     element: DictionaryElementNode,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -876,8 +905,7 @@ private fun DictionaryDetailsBlock(
         ?.ifBlank { null }
         ?: "Details"
     val bodyNodes = element.children.filterNot { it === summary }
-    var expanded by remember(element) { mutableStateOf(element.open) }
-    val showBody = !nestedCollapseEnabled || expanded
+    var expanded by remember(element) { mutableStateOf(false) }
     val colorScheme = MaterialTheme.colorScheme
     val isSectionSummary = summaryText.equals("Grammar", ignoreCase = true) ||
         summaryText.equals("Etymology", ignoreCase = true)
@@ -887,19 +915,19 @@ private fun DictionaryDetailsBlock(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(6.dp))
-                .clickable(enabled = nestedCollapseEnabled) { expanded = !expanded }
+                .clickable { expanded = !expanded }
                 .padding(horizontal = 2.dp, vertical = 3.dp)
         ) {
             Icon(
-                if (showBody) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                contentDescription = if (showBody) "Collapse $summaryText" else "Expand $summaryText",
+                if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Collapse $summaryText" else "Expand $summaryText",
                 tint = colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(18.dp)
             )
             Spacer(Modifier.width(4.dp))
             Text(
                 text = summaryText,
-                color = if (showBody) colorScheme.onSurface else colorScheme.onSurfaceVariant,
+                color = if (expanded) colorScheme.onSurface else colorScheme.onSurfaceVariant,
                 fontSize = 14.sp,
                 fontWeight = if (isSectionSummary) FontWeight.Bold else FontWeight.Medium,
                 maxLines = 1,
@@ -907,10 +935,9 @@ private fun DictionaryDetailsBlock(
             )
         }
 
-        if (showBody && bodyNodes.isNotEmpty()) {
+        if (expanded && bodyNodes.isNotEmpty()) {
             DictionaryStructuredContent(
                 nodes = bodyNodes,
-                nestedCollapseEnabled = nestedCollapseEnabled,
                 color = color,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -923,7 +950,6 @@ private fun DictionaryDetailsBlock(
 @Composable
 private fun DictionaryOrderedList(
     element: DictionaryElementNode,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -934,7 +960,6 @@ private fun DictionaryOrderedList(
                 DictionaryGlossListItem(
                     item = item,
                     index = index,
-                    nestedCollapseEnabled = nestedCollapseEnabled,
                     color = color
                 )
             } else {
@@ -947,7 +972,6 @@ private fun DictionaryOrderedList(
                     )
                     DictionaryStructuredContent(
                         nodes = item.children,
-                        nestedCollapseEnabled = nestedCollapseEnabled,
                         color = color,
                         modifier = Modifier.weight(1f)
                     )
@@ -961,13 +985,16 @@ private fun DictionaryOrderedList(
 private fun DictionaryGlossListItem(
     item: DictionaryElementNode,
     index: Int,
-    nestedCollapseEnabled: Boolean,
     color: Color
 ) {
     val contentNodes = item.singleChildElement("div")?.children ?: item.children
     val tagNodes = contentNodes
         .filterIsInstance<DictionaryElementNode>()
         .filter { it.dataContent == "tags" }
+    val tagTexts = tagNodes
+        .flatMap { it.children }
+        .map { dictionaryNodePlainText(it).trim() }
+        .filter { it.isNotBlank() }
     val nonTagNodes = contentNodes.filterNot { it in tagNodes }
     val firstBlockIndex = nonTagNodes.indexOfFirst { it.isSenseDetailBlock() }
     val inlineNodes = if (firstBlockIndex == -1) nonTagNodes else nonTagNodes.take(firstBlockIndex)
@@ -975,28 +1002,34 @@ private fun DictionaryGlossListItem(
 
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Text(
-            text = circledNumber(index + 1),
+            text = "${index + 1}.",
             color = MaterialTheme.colorScheme.onSurface,
-            fontSize = 16.sp,
+            fontSize = 14.sp,
             lineHeight = 20.sp,
-            modifier = Modifier.width(28.dp)
+            modifier = Modifier.width(24.dp)
         )
-        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            tagNodes.forEach { tagNode ->
-                DictionaryTagRow(nodes = tagNode.children)
+        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalArrangement = Arrangement.spacedBy(3.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                tagTexts.forEach { tag ->
+                    DictionaryTagChip(tag = tag)
+                }
+                if (inlineNodes.any { dictionaryNodePlainText(it).isNotBlank() }) {
+                    DictionaryInlineText(
+                        nodes = inlineNodes,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontSize = 15.sp,
+                        lineHeight = 20.sp,
+                        fillMaxWidth = false
+                    )
+                }
             }
-            if (inlineNodes.any { dictionaryNodePlainText(it).isNotBlank() }) {
-                DictionaryInlineText(
-                    nodes = inlineNodes,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontSize = 15.sp,
-                    lineHeight = 21.sp
-                )
-            }
-            blockNodes.forEach { block ->
+            blockNodes.filterNot { it.shouldHideInCompactDictionaryEntry() }.forEach { block ->
                 DictionaryStructuredNode(
                     node = block,
-                    nestedCollapseEnabled = nestedCollapseEnabled,
                     color = color
                 )
             }
@@ -1007,7 +1040,6 @@ private fun DictionaryGlossListItem(
 @Composable
 private fun DictionaryUnorderedList(
     element: DictionaryElementNode,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -1018,7 +1050,6 @@ private fun DictionaryUnorderedList(
                 Text("•", color = color, fontSize = 14.sp, modifier = Modifier.width(18.dp))
                 DictionaryStructuredContent(
                     nodes = item.children,
-                    nestedCollapseEnabled = nestedCollapseEnabled,
                     color = color,
                     modifier = Modifier.weight(1f)
                 )
@@ -1030,7 +1061,6 @@ private fun DictionaryUnorderedList(
 @Composable
 private fun DictionaryGenericListItem(
     element: DictionaryElementNode,
-    nestedCollapseEnabled: Boolean,
     color: Color,
     modifier: Modifier = Modifier
 ) {
@@ -1038,7 +1068,6 @@ private fun DictionaryGenericListItem(
         Text("•", color = color, fontSize = 14.sp, modifier = Modifier.width(18.dp))
         DictionaryStructuredContent(
             nodes = element.children,
-            nestedCollapseEnabled = nestedCollapseEnabled,
             color = color,
             modifier = Modifier.weight(1f)
         )
@@ -1048,7 +1077,6 @@ private fun DictionaryGenericListItem(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DictionaryTagRow(nodes: List<DictionaryNode>, modifier: Modifier = Modifier) {
-    val colorScheme = MaterialTheme.colorScheme
     val tags = remember(nodes) {
         nodes.map { dictionaryNodePlainText(it).trim() }.filter { it.isNotBlank() }
     }
@@ -1060,73 +1088,7 @@ private fun DictionaryTagRow(nodes: List<DictionaryNode>, modifier: Modifier = M
         modifier = modifier.fillMaxWidth()
     ) {
         tags.forEach { tag ->
-            Surface(
-                color = colorScheme.inverseSurface.copy(alpha = if (isSystemInDarkTheme()) 0.72f else 0.82f),
-                shape = RoundedCornerShape(4.dp)
-            ) {
-                Text(
-                    text = tag,
-                    color = colorScheme.inverseOnSurface,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun DictionaryExampleSentence(
-    element: DictionaryElementNode,
-    color: Color,
-    modifier: Modifier = Modifier
-) {
-    val colorScheme = MaterialTheme.colorScheme
-    Surface(
-        color = colorScheme.onSurface.copy(alpha = if (isSystemInDarkTheme()) 0.08f else 0.05f),
-        shape = RoundedCornerShape(6.dp),
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(top = 2.dp, bottom = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .drawBehind {
-                    drawLine(
-                        color = colorScheme.onSurface.copy(alpha = 0.82f),
-                        start = Offset(0f, 0f),
-                        end = Offset(0f, size.height),
-                        strokeWidth = 3.dp.toPx()
-                    )
-                }
-                .padding(start = 12.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(3.dp)
-        ) {
-            element.children.filterIsInstance<DictionaryElementNode>().forEach { line ->
-                val lineColor = if (line.dataContent == "example-sentence-a") {
-                    colorScheme.onSurface
-                } else {
-                    color
-                }
-                DictionaryInlineText(
-                    nodes = line.children,
-                    color = lineColor,
-                    fontSize = when (line.dataContent) {
-                        "example-sentence-a" -> 16.sp
-                        "example-sentence-b" -> 13.sp
-                        else -> 12.sp
-                    },
-                    lineHeight = when (line.dataContent) {
-                        "example-sentence-a" -> 22.sp
-                        "example-sentence-b" -> 18.sp
-                        else -> 16.sp
-                    },
-                    italic = line.dataContent == "example-sentence-a",
-                    textAlign = if (line.dataContent == "example-sentence-c") TextAlign.End else TextAlign.Start,
-                    modifier = Modifier.fillMaxWidth()
-                )
-            }
+            DictionaryTagChip(tag = tag)
         }
     }
 }
@@ -1171,7 +1133,8 @@ private fun DictionaryInlineText(
     fontSize: androidx.compose.ui.unit.TextUnit = 14.sp,
     lineHeight: androidx.compose.ui.unit.TextUnit = 20.sp,
     italic: Boolean = false,
-    textAlign: TextAlign = TextAlign.Start
+    textAlign: TextAlign = TextAlign.Start,
+    fillMaxWidth: Boolean = true
 ) {
     val text = remember(nodes, color, italic) {
         dictionaryAnnotatedText(nodes, color, italic)
@@ -1184,7 +1147,7 @@ private fun DictionaryInlineText(
         fontSize = fontSize,
         lineHeight = lineHeight,
         textAlign = textAlign,
-        modifier = modifier.fillMaxWidth()
+        modifier = if (fillMaxWidth) modifier.fillMaxWidth() else modifier
     )
 }
 
@@ -1349,6 +1312,19 @@ private fun DictionaryNode.isStandaloneDictionaryBlock(): Boolean {
         )
 }
 
+private fun DictionaryNode.shouldHideInCompactDictionaryEntry(): Boolean {
+    return this is DictionaryElementNode && (
+        dataContent == "example-sentence" ||
+            dataContent == "extra-info" ||
+            dataContent?.startsWith("details-entry-Etymology") == true ||
+            dataContent?.startsWith("details-entry-examples") == true
+        )
+}
+
+private fun DictionaryElementNode.isGrammarDetails(): Boolean {
+    return tag == "details" && dataContent?.startsWith("details-entry-Grammar") == true
+}
+
 private fun DictionaryNode.isSenseDetailBlock(): Boolean {
     return this is DictionaryElementNode && (
         tag == "details" ||
@@ -1380,23 +1356,22 @@ private fun StringBuilder.appendDictionaryPlainText(node: DictionaryNode) {
     when (node) {
         is DictionaryTextNode -> append(node.text)
         is DictionaryElementNode -> {
+            if (node.shouldHideInCompactDictionaryEntry()) return
+            val summary = node.children.firstOrNull {
+                it is DictionaryElementNode && it.tag == "summary"
+            }
+            val children = if (node.isGrammarDetails()) {
+                append("Grammar: ")
+                node.children.filterNot { it === summary }
+            } else {
+                node.children
+            }
             val isBlock = node.tag in setOf("div", "p", "li", "ol", "ul", "details", "summary")
             if (isBlock && isNotEmpty() && last() != '\n') append('\n')
-            node.children.forEach { appendDictionaryPlainText(it) }
+            children.forEach { appendDictionaryPlainText(it) }
             if (isBlock && isNotEmpty() && last() != '\n') append('\n')
         }
     }
-}
-
-private fun circledNumber(number: Int): String {
-    val circled = listOf(
-        "①", "②", "③", "④", "⑤", "⑥", "⑦", "⑧", "⑨", "⑩",
-        "⑪", "⑫", "⑬", "⑭", "⑮", "⑯", "⑰", "⑱", "⑲", "⑳",
-        "㉑", "㉒", "㉓", "㉔", "㉕", "㉖", "㉗", "㉘", "㉙", "㉚",
-        "㉛", "㉜", "㉝", "㉞", "㉟", "㊱", "㊲", "㊳", "㊴", "㊵",
-        "㊶", "㊷", "㊸", "㊹", "㊺", "㊻", "㊼", "㊽", "㊾", "㊿"
-    )
-    return circled.getOrNull(number - 1) ?: "$number."
 }
 
 private fun String.isStructuredJsonCandidate(): Boolean {

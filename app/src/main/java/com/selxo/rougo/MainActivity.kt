@@ -3716,8 +3716,8 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
     var dictOrder by remember { mutableStateOf(engine.getDictOrder()) }
     var importStatus by remember { mutableStateOf("") }
     var isImporting by remember { mutableStateOf(false) }
-    var nestedCollapseByDict by remember(installedDicts) {
-        mutableStateOf(installedDicts.associateWith { engine.isDictionaryNestedCollapseEnabled(it) })
+    var blockCollapseByDict by remember(installedDicts) {
+        mutableStateOf(installedDicts.associateWith { engine.isDictionaryBlockCollapseEnabled(it) })
     }
 
     val sortedDicts = remember(installedDicts, dictOrder) {
@@ -3795,7 +3795,7 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(sortedDicts) { dictName ->
-                        val nestedCollapsesEnabled = nestedCollapseByDict[dictName] ?: true
+                        val blockCollapseEnabled = blockCollapseByDict[dictName] ?: true
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
@@ -3826,16 +3826,16 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(
-                                        "Nested collapses",
+                                        "Collapse dictionary block",
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 13.sp,
                                         modifier = Modifier.weight(1f)
                                     )
                                     Switch(
-                                        checked = nestedCollapsesEnabled,
+                                        checked = blockCollapseEnabled,
                                         onCheckedChange = { enabled ->
-                                            engine.setDictionaryNestedCollapseEnabled(dictName, enabled)
-                                            nestedCollapseByDict = nestedCollapseByDict + (dictName to enabled)
+                                            engine.setDictionaryBlockCollapseEnabled(dictName, enabled)
+                                            blockCollapseByDict = blockCollapseByDict + (dictName to enabled)
                                         }
                                     )
                                 }
