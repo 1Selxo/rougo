@@ -5,6 +5,7 @@ import com.selxo.rougo.dictionary.Deinflector
 import com.selxo.rougo.dictionary.Rule
 import com.selxo.rougo.dictionary.RuleDeinflector
 import com.selxo.rougo.dictionary.suffixInflection
+import com.selxo.rougo.dictionary.wholeWordInflection
 
 object FrenchDeinflector : Deinflector {
 
@@ -21,11 +22,17 @@ object FrenchDeinflector : Deinflector {
     private val deinflector = RuleDeinflector(allRules)
 
     private fun buildFrenchRules(): List<Rule> = buildList {
+        addAll(frenchContractionRules())
         addAll(frenchAdverbRules())
         addAll(frenchRulesPart1())
         addAll(frenchRulesPart2())
         addAll(frenchRulesPart3())
     }
+
+    private fun frenchContractionRules(): List<Rule> = listOf(
+        wholeWordInflection("c'est", "être", emptySet(), setOf("v")),
+        wholeWordInflection("c’est", "être", emptySet(), setOf("v")),
+    )
 
     private fun frenchAdverbRules(): List<Rule> = listOf(
         suffixInflection("amment", "ant", emptySet(), setOf("adj")),
