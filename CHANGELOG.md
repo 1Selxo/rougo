@@ -1,5 +1,11 @@
 # Changelog
 
+## V2.7.2 - 2026-06-04
+
+- Fixed Bilibili and Niconico share/import paths and hardened non-YouTube video imports.
+- Improved downloaded video copy management and library cleanup controls.
+- Kept library search visible and polished dictionary popup collapse rendering.
+
 ## V2.7.1 - 2026-06-03
 
 - Improved dictionary lookup with popup UI enhancements.
