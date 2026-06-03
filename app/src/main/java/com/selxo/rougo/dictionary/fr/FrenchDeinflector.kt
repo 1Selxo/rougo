@@ -5,7 +5,6 @@ import com.selxo.rougo.dictionary.Deinflector
 import com.selxo.rougo.dictionary.Rule
 import com.selxo.rougo.dictionary.RuleDeinflector
 import com.selxo.rougo.dictionary.suffixInflection
-import com.selxo.rougo.dictionary.wholeWordInflection
 
 object FrenchDeinflector : Deinflector {
 
@@ -22,17 +21,12 @@ object FrenchDeinflector : Deinflector {
     private val deinflector = RuleDeinflector(allRules)
 
     private fun buildFrenchRules(): List<Rule> = buildList {
-        addAll(frenchContractionRules())
         addAll(frenchAdverbRules())
+        addAll(frenchPastParticipleRules())
         addAll(frenchRulesPart1())
         addAll(frenchRulesPart2())
         addAll(frenchRulesPart3())
     }
-
-    private fun frenchContractionRules(): List<Rule> = listOf(
-        wholeWordInflection("c'est", "être", emptySet(), setOf("v")),
-        wholeWordInflection("c’est", "être", emptySet(), setOf("v")),
-    )
 
     private fun frenchAdverbRules(): List<Rule> = listOf(
         suffixInflection("amment", "ant", emptySet(), setOf("adj")),
@@ -42,6 +36,13 @@ object FrenchDeinflector : Deinflector {
         suffixInflection("ièrement", "ier", emptySet(), setOf("adj")),
         suffixInflection("èrement", "er", emptySet(), setOf("adj")),
         suffixInflection("ment", "", emptySet(), setOf("adj")),
+    )
+
+    private fun frenchPastParticipleRules(): List<Rule> = listOf(
+        suffixInflection("ées", "er", setOf("v"), setOf("v")),
+        suffixInflection("ée", "er", setOf("v"), setOf("v")),
+        suffixInflection("és", "er", setOf("v"), setOf("v")),
+        suffixInflection("é", "er", setOf("v"), setOf("v")),
     )
 
     private fun frenchRulesPart1(): List<Rule> = listOf(

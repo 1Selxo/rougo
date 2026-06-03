@@ -34,6 +34,23 @@ class DictionaryLookupTest {
     }
 
     @Test
+    fun frenchPastParticiplesDeinflectToInfinitiveCandidates() {
+        val motivatedCandidates = FrenchDeinflector.preProcess("motivé")
+            .flatMap { FrenchDeinflector.deinflect(it, "fr") }
+            .map { it.text }
+        val motivatedAgreementCandidates = FrenchDeinflector.preProcess("motivées")
+            .flatMap { FrenchDeinflector.deinflect(it, "fr") }
+            .map { it.text }
+        val understoodCandidates = FrenchDeinflector.preProcess("compris")
+            .flatMap { FrenchDeinflector.deinflect(it, "fr") }
+            .map { it.text }
+
+        assertTrue(motivatedCandidates.contains("motiver"))
+        assertTrue(motivatedAgreementCandidates.contains("motiver"))
+        assertTrue(understoodCandidates.contains("comprendre"))
+    }
+
+    @Test
     fun frenchApostropheContractionsAlsoTryTheRightHandWord() {
         val reflexiveCandidates = FrenchDeinflector.preProcess("s'est")
             .flatMap { FrenchDeinflector.deinflect(it, "fr") }
