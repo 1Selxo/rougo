@@ -79,6 +79,32 @@ import org.json.JSONObject
 private const val MAX_RIGHT_CONTEXT_CHARS = 96
 private const val MAX_RIGHT_CONTEXT_WORDS = 12
 private val RIGHT_CONTEXT_LOOKUP_LANGUAGES = setOf("de", "en")
+private val PERIOD_ABBREVIATIONS = setOf(
+    "bzw.",
+    "bspw.",
+    "ca.",
+    "d.h.",
+    "dr.",
+    "etc.",
+    "evtl.",
+    "ggf.",
+    "inkl.",
+    "i.d.r.",
+    "m.e.",
+    "nr.",
+    "prof.",
+    "s.",
+    "sog.",
+    "u.a.",
+    "u.u.",
+    "usw.",
+    "v.a.",
+    "vgl.",
+    "z.b.",
+    "z.t.",
+    "zzgl.",
+)
+private val INITIAL_ABBREVIATION_REGEX = Regex("^(?:\\p{L}{1,3}\\.){2,}$")
 
 @Composable
 fun JapaneseClickableSubtitle(
@@ -147,7 +173,8 @@ private fun rightContextEnd(text: String, initialEnd: Int): Int {
 
     while (end < text.length && end - initialEnd < MAX_RIGHT_CONTEXT_CHARS && words < MAX_RIGHT_CONTEXT_WORDS) {
         val char = text[end]
-        if (char == '\n' || char == '\r' || char == '.' || char == '?' || char == '!' || char == ';' || char == ':') break
+        if (char == '\n' || char == '\r' || char == '?' || char == '!' || char == ';' || char == ':') break
+        if (char == '.' && !isAbbreviationPeriod(text, end)) break
         if (isWordLookupChar(char)) {
             words++
             while (end < text.length && isWordLookupChar(text[end])) end++
@@ -157,6 +184,43 @@ private fun rightContextEnd(text: String, initialEnd: Int): Int {
     }
 
     return end
+}
+
+private fun isAbbreviationPeriod(text: String, periodIndex: Int): Boolean {
+    var start = abbreviationTokenStart(text, periodIndex)
+    while (start > 0) {
+        var spaceStart = start
+        while (spaceStart > 0 && text[spaceStart - 1].isWhitespace()) spaceStart--
+        if (spaceStart == start || spaceStart == 0 || text[spaceStart - 1] != '.') break
+        start = abbreviationTokenStart(text, spaceStart - 1)
+    }
+
+    var end = periodIndex + 1
+    while (end < text.length && isAbbreviationChar(text[end])) end++
+    while (end < text.length) {
+        var tokenStart = end
+        while (tokenStart < text.length && text[tokenStart].isWhitespace()) tokenStart++
+
+        var tokenEnd = tokenStart
+        while (tokenEnd < text.length && text[tokenEnd].isLetterOrDigit()) tokenEnd++
+
+        if (tokenEnd == tokenStart || tokenEnd - tokenStart > 3 || tokenEnd >= text.length || text[tokenEnd] != '.') break
+        end = tokenEnd + 1
+        while (end < text.length && isAbbreviationChar(text[end])) end++
+    }
+
+    val candidate = text.substring(start, end).lowercase(Locale.ROOT).replace(Regex("\\s+"), "")
+    return candidate in PERIOD_ABBREVIATIONS || INITIAL_ABBREVIATION_REGEX.matches(candidate)
+}
+
+private fun abbreviationTokenStart(text: String, index: Int): Int {
+    var start = index
+    while (start > 0 && isAbbreviationChar(text[start - 1])) start--
+    return start
+}
+
+private fun isAbbreviationChar(char: Char): Boolean {
+    return char.isLetterOrDigit() || char == '.'
 }
 
 private fun String.normalizedLookupLanguage(): String {
