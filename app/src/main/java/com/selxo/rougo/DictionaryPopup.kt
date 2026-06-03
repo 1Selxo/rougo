@@ -662,7 +662,7 @@ private fun DictionaryEntrySection(
     val preview = remember(sourceText) { firstDictionaryDefinitionLine(sourceText) }
     val expandable = remember(sourceText, preview) { isExpandableDictionarySource(sourceText, preview) }
     val blockCanCollapse = blockCollapseEnabled && expandable
-    val showBody = !blockCollapseEnabled || expanded
+    val showBody = !blockCanCollapse || expanded
 
     Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
         Row(
@@ -840,6 +840,11 @@ private fun DictionaryStructuredNode(
                 color = color,
                 modifier = modifier
             )
+            node.tag == "ul" && node.dataContent == "glosses" -> DictionaryGlossList(
+                element = node,
+                color = color,
+                modifier = modifier
+            )
             node.tag == "ul" -> DictionaryUnorderedList(
                 element = node,
                 color = color,
@@ -992,30 +997,49 @@ private fun DictionaryOrderedList(
     color: Color,
     modifier: Modifier = Modifier
 ) {
+    if (element.dataContent == "glosses") {
+        DictionaryGlossList(
+            element = element,
+            color = color,
+            modifier = modifier
+        )
+        return
+    }
+
     val items = element.children.filterIsInstance<DictionaryElementNode>().filter { it.tag == "li" }
     Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items.forEachIndexed { index, item ->
-            if (element.dataContent == "glosses") {
-                DictionaryGlossListItem(
-                    item = item,
-                    index = index,
-                    color = color
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                Text(
+                    text = "${index + 1}.",
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 14.sp,
+                    modifier = Modifier.width(24.dp)
                 )
-            } else {
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
-                    Text(
-                        text = "${index + 1}.",
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = 14.sp,
-                        modifier = Modifier.width(24.dp)
-                    )
-                    DictionaryStructuredContent(
-                        nodes = item.children,
-                        color = color,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
+                DictionaryStructuredContent(
+                    nodes = item.children,
+                    color = color,
+                    modifier = Modifier.weight(1f)
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun DictionaryGlossList(
+    element: DictionaryElementNode,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    val items = element.children.filterIsInstance<DictionaryElementNode>().filter { it.tag == "li" }
+    Column(modifier = modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.forEachIndexed { index, item ->
+            DictionaryGlossListItem(
+                item = item,
+                index = index,
+                color = color
+            )
         }
     }
 }
