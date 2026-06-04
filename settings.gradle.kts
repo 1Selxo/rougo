@@ -9,7 +9,7 @@ pluginManagement {
         }
         mavenCentral()
         gradlePluginPortal()
-        maven { url = uri("https://jitpack.io") } // <-- ADD THIS LINE
+        maven { url = uri("https://jitpack.io") }
 
     }
 }
@@ -26,4 +26,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "My Application"
 include(":app")
-include(":hoshidicts") // <-- ADD THIS LINE
+include(":hoshidicts")

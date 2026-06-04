@@ -10,9 +10,6 @@ android {
     namespace = "de.manhhao.hoshi"
     compileSdk = 36
 
-    // Fixed: Removed explicit versions/paths entirely.
-    // Gradle will now auto-detect and use your highest pre-installed local NDK version.
-
     defaultConfig {
         minSdk = 24
 

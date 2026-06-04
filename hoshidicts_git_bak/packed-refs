@@ -1,9 +1,0 @@
-# pack-refs with: peeled fully-peeled sorted 
-40595e753c8622097e12d3825082143ddb0a6ff1 refs/remotes/origin/main-gpl
-064b41085e4d1650a4d34f18c72ed3e5a723b0e8 refs/remotes/origin/main-mit
-d2c67616ae9baee81b0e479efc2684fefd64fb63 refs/tags/v1.0.0
-b7662f5ae5166a3d99b59bc868d25aa80a9d023a refs/tags/v1.1.0
-ef08e53b04930bc65c979d97b5314cb01bbaa410 refs/tags/v1.2.0
-0ef0c78bc4f9818e224e8c5aaf9ec7d51a8c020f refs/tags/v1.3.0
-ec37b2a2eab20824196e9ce3beafdfa5ec62fdc4 refs/tags/v1.4.0
-5f4cf01767e542ea6f920d39a22d2610aad972ee refs/tags/v1.4.1
