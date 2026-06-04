@@ -1,8 +1,10 @@
 package com.selxo.rougo
 
+import android.app.Activity
 import android.app.Application
 import android.content.Context
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.util.Log
 import androidx.compose.material.icons.filled.*
@@ -19,8 +21,37 @@ class RougoApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         CrashReporter.install(this)
+        RougoForegroundTracker.register(this)
     }
 }
+
+object RougoForegroundTracker {
+    @Volatile
+    private var startedActivityCount = 0
+
+    val isForeground: Boolean
+        get() = startedActivityCount > 0
+
+    fun register(application: Application) {
+        application.registerActivityLifecycleCallbacks(object : Application.ActivityLifecycleCallbacks {
+            override fun onActivityStarted(activity: Activity) {
+                startedActivityCount += 1
+                clearCompletedDownloadNotifications(activity)
+            }
+
+            override fun onActivityStopped(activity: Activity) {
+                startedActivityCount = (startedActivityCount - 1).coerceAtLeast(0)
+            }
+
+            override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
+            override fun onActivityResumed(activity: Activity) = Unit
+            override fun onActivityPaused(activity: Activity) = Unit
+            override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+            override fun onActivityDestroyed(activity: Activity) = Unit
+        })
+    }
+}
+
 object CrashReporter {
     private const val TAG = "RougoCrash"
     private const val CRASH_FILE_NAME = "last_crash.txt"

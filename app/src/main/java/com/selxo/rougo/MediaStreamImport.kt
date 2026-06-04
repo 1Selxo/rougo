@@ -29,6 +29,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.edit
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.ffmpeg.execute
 import com.yausername.youtubedl_android.YoutubeDL
@@ -83,6 +84,9 @@ private val mediaToolsInitLock = Any()
 private var mediaToolsInitialized = false
 @Volatile
 private var mediaToolsInitFailureLogged = false
+private const val DOWNLOAD_NOTIFICATION_PREFS = "rougo_download_notifications"
+private const val PREF_COMPLETED_DOWNLOAD_NOTIFICATION_IDS = "completed_download_notification_ids"
+private val completedDownloadNotificationLock = Any()
 internal fun ensureMediaToolsReady(context: Context): Boolean {
     if (mediaToolsInitialized) return true
     val appContext = context.applicationContext
@@ -597,8 +601,59 @@ internal fun cancelPlayerNotification(context: Context) {
 private fun downloadNotificationId(key: String): Int {
     return DOWNLOAD_NOTIFICATION_ID_BASE + ((key.hashCode() and 0x7fffffff) % 1000)
 }
-private fun showDownloadNotification(context: Context, key: String, notification: NotificationCompat.Builder.() -> Unit) {
-    if (!hasPostNotificationsPermission(context)) return
+private fun completedDownloadPrefs(context: Context) =
+    context.applicationContext.getSharedPreferences(DOWNLOAD_NOTIFICATION_PREFS, Context.MODE_PRIVATE)
+
+private fun rememberCompletedDownloadNotification(context: Context, notificationId: Int) {
+    synchronized(completedDownloadNotificationLock) {
+        val prefs = completedDownloadPrefs(context)
+        val current = prefs.getStringSet(PREF_COMPLETED_DOWNLOAD_NOTIFICATION_IDS, emptySet()).orEmpty()
+        prefs.edit {
+            putStringSet(PREF_COMPLETED_DOWNLOAD_NOTIFICATION_IDS, current + notificationId.toString())
+        }
+    }
+}
+
+private fun forgetCompletedDownloadNotification(context: Context, notificationId: Int) {
+    synchronized(completedDownloadNotificationLock) {
+        val prefs = completedDownloadPrefs(context)
+        val current = prefs.getStringSet(PREF_COMPLETED_DOWNLOAD_NOTIFICATION_IDS, emptySet()).orEmpty()
+        if (current.isNotEmpty()) {
+            prefs.edit {
+                putStringSet(PREF_COMPLETED_DOWNLOAD_NOTIFICATION_IDS, current - notificationId.toString())
+            }
+        }
+    }
+}
+
+internal fun clearCompletedDownloadNotifications(context: Context) {
+    val ids = synchronized(completedDownloadNotificationLock) {
+        val prefs = completedDownloadPrefs(context)
+        val current = prefs.getStringSet(PREF_COMPLETED_DOWNLOAD_NOTIFICATION_IDS, emptySet()).orEmpty()
+        prefs.edit { remove(PREF_COMPLETED_DOWNLOAD_NOTIFICATION_IDS) }
+        current.mapNotNull { it.toIntOrNull() }
+    }
+    ids.forEach { notificationId ->
+        try {
+            NotificationManagerCompat.from(context).cancel(notificationId)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+}
+
+private fun cancelDownloadNotification(context: Context, key: String) {
+    val notificationId = downloadNotificationId(key)
+    forgetCompletedDownloadNotification(context, notificationId)
+    try {
+        NotificationManagerCompat.from(context).cancel(notificationId)
+    } catch (e: Exception) {
+        e.printStackTrace()
+    }
+}
+
+private fun showDownloadNotification(context: Context, key: String, notification: NotificationCompat.Builder.() -> Unit): Boolean {
+    if (!hasPostNotificationsPermission(context)) return false
     createDownloadNotificationChannel(context)
 
     val builder = NotificationCompat.Builder(context, DOWNLOAD_NOTIFICATION_CHANNEL_ID)
@@ -612,8 +667,10 @@ private fun showDownloadNotification(context: Context, key: String, notification
 
     try {
         NotificationManagerCompat.from(context).notify(downloadNotificationId(key), builder.build())
+        return true
     } catch (e: SecurityException) {
         e.printStackTrace()
+        return false
     }
 }
 private fun showDownloadProgressNotification(
@@ -623,6 +680,7 @@ private fun showDownloadProgressNotification(
     progressPercent: Int?,
     detail: String = "Downloading..."
 ) {
+    forgetCompletedDownloadNotification(context, downloadNotificationId(key))
     showDownloadNotification(context, key) {
         setSmallIcon(android.R.drawable.stat_sys_download)
         setContentTitle(title)
@@ -639,7 +697,12 @@ private fun showDownloadProgressNotification(
     }
 }
 private fun showDownloadCompleteNotification(context: Context, key: String, title: String) {
-    showDownloadNotification(context, key) {
+    if (RougoForegroundTracker.isForeground) {
+        cancelDownloadNotification(context, key)
+        return
+    }
+
+    val posted = showDownloadNotification(context, key) {
         setSmallIcon(android.R.drawable.stat_sys_download_done)
         setContentTitle("Download complete")
         setContentText(title)
@@ -649,8 +712,10 @@ private fun showDownloadCompleteNotification(context: Context, key: String, titl
         setPriority(NotificationCompat.PRIORITY_DEFAULT)
         setProgress(0, 0, false)
     }
+    if (posted) rememberCompletedDownloadNotification(context, downloadNotificationId(key))
 }
 private fun showDownloadFailedNotification(context: Context, key: String, title: String, cancelled: Boolean = false) {
+    forgetCompletedDownloadNotification(context, downloadNotificationId(key))
     showDownloadNotification(context, key) {
         setSmallIcon(android.R.drawable.stat_notify_error)
         setContentTitle(if (cancelled) "Download cancelled" else "Download failed")
