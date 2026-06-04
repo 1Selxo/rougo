@@ -1,5 +1,12 @@
 # Changelog
 
+## V2.7.3 - 2026-06-04
+
+- Synced player repeat controls and subtitle toggles.
+- Hid the pitch dictionary collapse toggle when it is not useful.
+- Pruned duplicate imports and dead refactor leftovers after the player/dictionary polish split.
+- Refreshed README screenshots and documentation for the latest UI.
+
 ## V2.7.2 - 2026-06-04
 
 - Fixed Bilibili and Niconico share/import paths and hardened non-YouTube video imports.
