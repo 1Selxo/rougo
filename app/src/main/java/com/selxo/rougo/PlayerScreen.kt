@@ -444,6 +444,12 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
             playVoiceSegment(segment, onPlaybackEnded = ::finish)
         }
 
+    fun pauseSourceForRepeatAttemptPlayback() {
+        try { vlcPlayer.pause() } catch (e: Exception) {}
+        isPlaying = false
+        currentPos = vlcPlayer.time.coerceAtLeast(0L)
+    }
+
     fun toggleVoiceSegment(segment: ShadowRecording) {
         if (activeVoiceSegmentId == segment.id) {
             if (voiceAudioPlayer.isPlaying) {
@@ -824,6 +830,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                     if (repeatPracticeSegment?.id != segment.id) break
 
                     repeatPracticePhase = RepeatPracticePhase.PlayingAttempt
+                    pauseSourceForRepeatAttemptPlayback()
                     playVoiceSegmentUntilComplete(attempt)
                     if (!shouldSaveAttempt) deleteSessionTemporaryAttempt(attempt.filePath)
                 }
@@ -863,7 +870,10 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                 repeatPracticeSegment != null
             if (activeTimeline) {
                 val frameMs = withFrameMillis { it }
-                if (isPlaying || activeOriginalSegment != null || repeatPracticeSegment != null) {
+                val shouldUpdateSourceTimeline = isPlaying ||
+                    activeOriginalSegment != null ||
+                    (repeatPracticeSegment != null && repeatPracticePhase != RepeatPracticePhase.PlayingAttempt)
+                if (shouldUpdateSourceTimeline) {
                     val polledPos = vlcPlayer.time.coerceAtLeast(0L)
                     val frameDelta = if (lastFrameMs > 0L) (frameMs - lastFrameMs).coerceIn(0L, 100L) else 0L
                     currentPos = if (polledPos == lastPolledMainPos && frameDelta > 0L && duration > 0L) {
