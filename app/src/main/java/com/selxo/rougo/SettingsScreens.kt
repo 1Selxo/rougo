@@ -455,6 +455,9 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
     var blockCollapseByDict by remember(installedDicts) {
         mutableStateOf(installedDicts.associateWith { engine.isDictionaryBlockCollapseEnabled(it) })
     }
+    val pitchDictionaries = remember(installedDicts) {
+        installedDicts.associateWith { engine.isPitchDictionary(it) }
+    }
 
     val sortedDicts = remember(installedDicts, dictOrder) {
         installedDicts.sortedBy { name ->
@@ -532,6 +535,7 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     items(sortedDicts) { dictName ->
                         val blockCollapseEnabled = blockCollapseByDict[dictName] ?: true
+                        val isPitchDictionary = pitchDictionaries[dictName] == true
                         Card(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
                         ) {
@@ -557,23 +561,25 @@ fun DictionarySettingsScreen(onBack: () -> Unit) {
                                     }
                                 }
 
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(
-                                        "Collapse dictionary block",
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        fontSize = 13.sp,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                    Switch(
-                                        checked = blockCollapseEnabled,
-                                        onCheckedChange = { enabled ->
-                                            engine.setDictionaryBlockCollapseEnabled(dictName, enabled)
-                                            blockCollapseByDict = blockCollapseByDict + (dictName to enabled)
-                                        }
-                                    )
+                                if (!isPitchDictionary) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            "Collapse dictionary block",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            fontSize = 13.sp,
+                                            modifier = Modifier.weight(1f)
+                                        )
+                                        Switch(
+                                            checked = blockCollapseEnabled,
+                                            onCheckedChange = { enabled ->
+                                                engine.setDictionaryBlockCollapseEnabled(dictName, enabled)
+                                                blockCollapseByDict = blockCollapseByDict + (dictName to enabled)
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }

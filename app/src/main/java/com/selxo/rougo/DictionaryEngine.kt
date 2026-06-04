@@ -85,6 +85,11 @@ class DictionaryEngine private constructor(private val context: Context) {
         }
     }
 
+    fun isPitchDictionary(dictName: String): Boolean {
+        val folder = File(dictsDir, dictName)
+        return folder.isDirectory && entryTypes(folder).pitchCount > 0
+    }
+
     fun getTargetLanguage(): String {
         val saved = prefs.getString("target_language", DeinflectorRegistry.DEFAULT_LANGUAGE)
             ?: DeinflectorRegistry.DEFAULT_LANGUAGE
