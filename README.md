@@ -6,19 +6,27 @@
 
 ## Screenshots
 
-| Library | Player + Subtitles | Shadowing |
+| Library | YouTube Browsing | Player + Subtitles |
 |:---:|:---:|:---:|
-| <img src="media/screenshots/library-screen.jpg" alt="Library with local media, YouTube items, progress, subtitles, search, and import controls" width="220"> | <img src="media/screenshots/player-subtitle-menu.jpg" alt="Player screen with subtitle menu, embedded subtitle controls, subtitle delay, and latest recording waveform" width="220"> | <img src="media/screenshots/shadowing-waveform.jpg" alt="Shadowing screen with subtitle text, recording controls, waveform comparison, and repeat segment button" width="220"> |
+| <img src="media/screenshots/library-screen.jpg" alt="Library with local media, YouTube items, progress, subtitles, search, and import controls" width="220"> | <img src="media/screenshots/youtube-browsing.jpg" alt="In-app YouTube browsing screen with search results and navigation controls" width="220"> | <img src="media/screenshots/player-subtitle-menu.jpg" alt="Player screen with subtitle menu, embedded subtitle controls, subtitle delay, and latest recording waveform" width="220"> |
 
-| Dictionary Lookup | Settings | Light Mode |
+| Shadowing | Dictionary Lookup | Settings |
 |:---:|:---:|:---:|
-| <img src="media/screenshots/dictionary-popup.jpg" alt="Dictionary popup showing a Japanese lookup with reading, pitch accent, and dictionary entries" width="220"> | <img src="media/screenshots/settings-overview.jpg" alt="Settings screen with theme, dictionaries, target language, noise cancellation, and player controls" width="220"> | <img src="media/screenshots/light-mode-settings.jpg" alt="Light mode settings screen with theme, accent colors, dictionaries, target language, noise cancellation, and player controls" width="220"> |
+| <img src="media/screenshots/shadowing-waveform.jpg" alt="Shadowing screen with subtitle text, recording controls, waveform comparison, and repeat segment button" width="220"> | <img src="media/screenshots/dictionary-popup.jpg" alt="Dictionary popup showing a Japanese lookup with reading, pitch accent, and dictionary entries" width="220"> | <img src="media/screenshots/settings-overview.jpg" alt="Settings screen with theme, dictionaries, target language, noise cancellation, and player controls" width="220"> |
+
+| Light Purple | Light Green | Dark Teal |
+|:---:|:---:|:---:|
+| <img src="media/screenshots/light-mode-settings.jpg" alt="Light mode settings screen with a purple accent color" width="220"> | <img src="media/screenshots/light-green-accent.jpg" alt="Light settings screen with a green accent color" width="220"> | <img src="media/screenshots/dark-teal-accent.jpg" alt="Dark settings screen with a teal accent color" width="220"> |
+
+| Dark Orange | Light Blue |
+|:---:|:---:|
+| <img src="media/screenshots/dark-orange-accent.jpg" alt="Dark settings screen with an orange accent color" width="220"> | <img src="media/screenshots/light-blue-accent.jpg" alt="Light settings screen with a blue accent color" width="220"> |
 
 ## Highlights
 
 - Local audio and video library with progress tracking, search, filters, recordings, and subtitle status.
 - VLC-backed playback for common audio and video formats, including M4B audiobook metadata and cover art.
-- YouTube sharing/import with selectable quality and optional automatic subtitles.
+- In-app YouTube browsing plus sharing/import with selectable quality and optional automatic subtitles.
 - Subtitle controls for delay adjustment, custom subtitle import, embedded subtitle toggling, and language selection.
 - Shadowing mode with recording playback, original audio playback, repeat segments, waveform comparison, and visual feedback.
 - Built-in dictionary workflow with Yomitan-style dictionary import, language-aware lookup, and pitch dictionary support.
