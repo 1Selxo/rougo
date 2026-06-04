@@ -16,7 +16,7 @@
 
 | Color Themes |
 |:---:|
-| <img src="media/screenshots/light-mode-settings.jpg" alt="Light mode settings screen with a purple accent color" width="150"> <img src="media/screenshots/light-green-accent.jpg" alt="Light settings screen with a green accent color" width="150"> <img src="media/screenshots/dark-teal-accent.jpg" alt="Dark settings screen with a teal accent color" width="150"> <img src="media/screenshots/dark-orange-accent.jpg" alt="Dark settings screen with an orange accent color" width="150"> <img src="media/screenshots/light-blue-accent.jpg" alt="Light settings screen with a blue accent color" width="150"> |
+| <img src="media/screenshots/light-green-accent.jpg" alt="Light settings screen with a green accent color" width="150"> <img src="media/screenshots/dark-orange-accent.jpg" alt="Dark settings screen with an orange accent color" width="150"> <img src="media/screenshots/dark-teal-accent.jpg" alt="Dark settings screen with a teal accent color" width="150"> <img src="media/screenshots/light-blue-accent.jpg" alt="Light settings screen with a blue accent color" width="150"> |
 
 ## Highlights
 
