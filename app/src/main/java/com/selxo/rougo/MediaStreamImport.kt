@@ -1,6 +1,7 @@
 package com.selxo.rougo
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -8,11 +9,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
+import android.media.session.MediaSession
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import android.util.Size
 import android.webkit.JavascriptInterface
@@ -35,6 +38,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -450,10 +454,11 @@ internal fun downloadRemoteCover(context: Context, itemId: String, url: String):
 internal fun youtubeResolutionLabel(key: String): String {
     return YOUTUBE_RESOLUTION_OPTIONS.firstOrNull { it.key == key }?.label ?: "Ask every time"
 }
-internal fun hasPlayerNotificationPermission(context: Context): Boolean {
+private fun hasPostNotificationsPermission(context: Context): Boolean {
     return Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
         ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
 }
+internal fun hasPlayerNotificationPermission(context: Context): Boolean = hasPostNotificationsPermission(context)
 private fun createPlayerNotificationChannel(context: Context) {
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
 
@@ -470,11 +475,48 @@ private fun createPlayerNotificationChannel(context: Context) {
     }
     manager.createNotificationChannel(channel)
 }
+private fun createDownloadNotificationChannel(context: Context) {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+
+    val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+    if (manager.getNotificationChannel(DOWNLOAD_NOTIFICATION_CHANNEL_ID) != null) return
+
+    val channel = NotificationChannel(
+        DOWNLOAD_NOTIFICATION_CHANNEL_ID,
+        "Downloads",
+        NotificationManager.IMPORTANCE_LOW
+    ).apply {
+        description = "Media download progress for 朗語"
+        setShowBadge(false)
+    }
+    manager.createNotificationChannel(channel)
+}
 private fun playerNotificationPendingIntent(context: Context, action: String): PendingIntent {
     val flags = PendingIntent.FLAG_UPDATE_CURRENT or
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
     val intent = Intent(action).setPackage(context.packageName)
     return PendingIntent.getBroadcast(context, action.hashCode(), intent, flags)
+}
+private fun appContentPendingIntent(context: Context, requestCode: Int = 0): PendingIntent {
+    val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+    return PendingIntent.getActivity(
+        context,
+        requestCode,
+        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+        flags
+    )
+}
+private fun nativeNotificationBuilder(context: Context, channelId: String): Notification.Builder {
+    return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        Notification.Builder(context, channelId)
+    } else {
+        @Suppress("DEPRECATION")
+        Notification.Builder(context)
+    }
+}
+private fun nativeNotificationAction(icon: Int, title: String, pendingIntent: PendingIntent): Notification.Action {
+    return Notification.Action.Builder(icon, title, pendingIntent).build()
 }
 internal fun showPlayerNotification(
     context: Context,
@@ -484,55 +526,59 @@ internal fun showPlayerNotification(
     currentPos: Long,
     duration: Long,
     isPlaying: Boolean,
-    skipSeconds: Int
+    skipSeconds: Int,
+    mediaSessionToken: MediaSession.Token?
 ) {
-    if (!hasPlayerNotificationPermission(context)) return
+    if (!hasPostNotificationsPermission(context)) return
     createPlayerNotificationChannel(context)
 
-    val flags = PendingIntent.FLAG_UPDATE_CURRENT or
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
-    val contentIntent = PendingIntent.getActivity(
-        context,
-        0,
-        Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
-        flags
-    )
     val timeText = "${formatTime(currentPos)} / ${formatTime(duration)}"
     val largeIcon = coverArtPath?.let { decodeSampledBitmapFile(it, maxSize = 512) }
-
-    val notification = NotificationCompat.Builder(context, PLAYER_NOTIFICATION_CHANNEL_ID)
-        .setSmallIcon(android.R.drawable.ic_media_play)
-        .setContentTitle(title)
-        .setContentText(subtitle ?: timeText)
-        .setSubText(timeText)
-        .setContentIntent(contentIntent)
-        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-        .setOnlyAlertOnce(true)
-        .setShowWhen(false)
-        .setOngoing(isPlaying)
-        .also { builder ->
-            if (largeIcon != null) builder.setLargeIcon(largeIcon)
-        }
-        .addAction(
+    val actions = listOf(
+        nativeNotificationAction(
             android.R.drawable.ic_media_rew,
             "-${skipSeconds}s",
             playerNotificationPendingIntent(context, ACTION_PLAYER_REWIND)
-        )
-        .addAction(
+        ),
+        nativeNotificationAction(
             if (isPlaying) android.R.drawable.ic_media_pause else android.R.drawable.ic_media_play,
             if (isPlaying) "Pause" else "Play",
             playerNotificationPendingIntent(context, ACTION_PLAYER_PLAY_PAUSE)
-        )
-        .addAction(
+        ),
+        nativeNotificationAction(
             android.R.drawable.ic_media_ff,
             "+${skipSeconds}s",
             playerNotificationPendingIntent(context, ACTION_PLAYER_FORWARD)
-        )
-        .addAction(
+        ),
+        nativeNotificationAction(
             android.R.drawable.ic_menu_close_clear_cancel,
             "Stop",
             playerNotificationPendingIntent(context, ACTION_PLAYER_STOP)
         )
+    )
+
+    val notification = nativeNotificationBuilder(context, PLAYER_NOTIFICATION_CHANNEL_ID)
+        .setSmallIcon(if (isPlaying) android.R.drawable.ic_media_play else android.R.drawable.ic_media_pause)
+        .setContentTitle(title)
+        .setContentText(subtitle ?: timeText)
+        .setSubText(timeText)
+        .setContentIntent(appContentPendingIntent(context))
+        .setDeleteIntent(playerNotificationPendingIntent(context, ACTION_PLAYER_STOP))
+        .setVisibility(Notification.VISIBILITY_PUBLIC)
+        .setOnlyAlertOnce(true)
+        .setShowWhen(false)
+        .setOngoing(isPlaying)
+        .setCategory(Notification.CATEGORY_TRANSPORT)
+        .setPriority(Notification.PRIORITY_LOW)
+        .apply {
+            if (largeIcon != null) setLargeIcon(largeIcon)
+            actions.forEach { addAction(it) }
+            setStyle(
+                Notification.MediaStyle()
+                    .setMediaSession(mediaSessionToken)
+                    .setShowActionsInCompactView(0, 1, 2)
+            )
+        }
         .build()
 
     try {
@@ -547,6 +593,90 @@ internal fun cancelPlayerNotification(context: Context) {
     } catch (e: Exception) {
         e.printStackTrace()
     }
+}
+private fun downloadNotificationId(key: String): Int {
+    return DOWNLOAD_NOTIFICATION_ID_BASE + ((key.hashCode() and 0x7fffffff) % 1000)
+}
+private fun showDownloadNotification(context: Context, key: String, notification: NotificationCompat.Builder.() -> Unit) {
+    if (!hasPostNotificationsPermission(context)) return
+    createDownloadNotificationChannel(context)
+
+    val builder = NotificationCompat.Builder(context, DOWNLOAD_NOTIFICATION_CHANNEL_ID)
+        .setSmallIcon(android.R.drawable.stat_sys_download)
+        .setContentIntent(appContentPendingIntent(context, downloadNotificationId(key)))
+        .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+        .setOnlyAlertOnce(true)
+        .setShowWhen(true)
+        .setLocalOnly(false)
+        .apply(notification)
+
+    try {
+        NotificationManagerCompat.from(context).notify(downloadNotificationId(key), builder.build())
+    } catch (e: SecurityException) {
+        e.printStackTrace()
+    }
+}
+private fun showDownloadProgressNotification(
+    context: Context,
+    key: String,
+    title: String,
+    progressPercent: Int?,
+    detail: String = "Downloading..."
+) {
+    showDownloadNotification(context, key) {
+        setSmallIcon(android.R.drawable.stat_sys_download)
+        setContentTitle(title)
+        setContentText(detail)
+        setOngoing(true)
+        setAutoCancel(false)
+        setCategory(NotificationCompat.CATEGORY_PROGRESS)
+        setPriority(NotificationCompat.PRIORITY_LOW)
+        if (progressPercent != null) {
+            setProgress(100, progressPercent.coerceIn(0, 100), false)
+        } else {
+            setProgress(0, 0, true)
+        }
+    }
+}
+private fun showDownloadCompleteNotification(context: Context, key: String, title: String) {
+    showDownloadNotification(context, key) {
+        setSmallIcon(android.R.drawable.stat_sys_download_done)
+        setContentTitle("Download complete")
+        setContentText(title)
+        setOngoing(false)
+        setAutoCancel(true)
+        setCategory(NotificationCompat.CATEGORY_STATUS)
+        setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        setProgress(0, 0, false)
+    }
+}
+private fun showDownloadFailedNotification(context: Context, key: String, title: String, cancelled: Boolean = false) {
+    showDownloadNotification(context, key) {
+        setSmallIcon(android.R.drawable.stat_notify_error)
+        setContentTitle(if (cancelled) "Download cancelled" else "Download failed")
+        setContentText(title)
+        setOngoing(false)
+        setAutoCancel(true)
+        setCategory(NotificationCompat.CATEGORY_ERROR)
+        setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        setProgress(0, 0, false)
+    }
+}
+private fun downloadProgressPercent(progress: Float): Int? {
+    if (progress.isNaN() || progress.isInfinite() || progress < 0f || progress > 100f) return null
+    return progress.roundToInt().coerceIn(0, 100)
+}
+private fun downloadProgressDetail(progressPercent: Int?, etaSeconds: Long, line: String): String {
+    if (progressPercent == null) {
+        return line.takeIf { it.isNotBlank() }?.take(80) ?: "Downloading..."
+    }
+    val etaText = when {
+        etaSeconds <= 0L -> null
+        etaSeconds < 60L -> "${etaSeconds}s left"
+        etaSeconds < 3600L -> "${etaSeconds / 60L}m left"
+        else -> "${etaSeconds / 3600L}h ${(etaSeconds % 3600L) / 60L}m left"
+    }
+    return listOfNotNull("$progressPercent%", etaText).joinToString(" - ")
 }
 internal fun selectPreferredYoutubeSubtitle(choices: List<YoutubeSubtitleChoice>, preferredLanguage: String): YoutubeSubtitleChoice? {
     if (choices.isEmpty()) return null
@@ -677,12 +807,23 @@ internal fun downloadYoutubeSubtitle(context: Context, url: String, languageCode
     }
 }
 internal fun downloadVideoLinkToLibraryItem(context: Context, url: String, existingItem: LibraryItem? = null): LibraryItem? {
-    if (!ensureMediaToolsReady(context)) return null
+    val itemId = existingItem?.id ?: UUID.randomUUID().toString()
+    val fileId = itemId.replace(Regex("[^A-Za-z0-9_-]"), "_")
+    val notificationKey = "media_download_$fileId"
+    val initialTitle = existingItem?.title?.takeIf { !looksLikeGeneratedFileId(it) }
+        ?: sourceDefaultTitle(url)
+
+    showDownloadProgressNotification(context, notificationKey, initialTitle, null, "Preparing download...")
+
+    if (!ensureMediaToolsReady(context)) {
+        showDownloadFailedNotification(context, notificationKey, initialTitle)
+        return null
+    }
 
     val setupData = runCatching { fetchYoutubeSetupData(context, url) }.getOrNull()
-    val itemId = existingItem?.id ?: UUID.randomUUID().toString()
+    val notificationTitle = cleanOptionalYtdlpTitle(setupData?.title, url)
+        ?: initialTitle
     val destDir = File(context.getExternalFilesDir(Environment.DIRECTORY_MOVIES), "RougoDownloads").apply { mkdirs() }
-    val fileId = itemId.replace(Regex("[^A-Za-z0-9_-]"), "_")
 
     val request = addFastYoutubeOptions(context, YoutubeDLRequest(url), url, skipDownload = false)
     request.addOption("-f", "bestvideo[height<=720]+bestaudio/best[height<=720]/best")
@@ -690,11 +831,35 @@ internal fun downloadVideoLinkToLibraryItem(context: Context, url: String, exist
     request.addOption("-o", "${destDir.absolutePath}/$fileId.%(title)s.%(ext)s")
 
     return try {
-        YoutubeDL.getInstance().execute(request, fileId, false)
+        var lastProgressNotificationAt = 0L
+        var lastProgressPercent = -1
+        showDownloadProgressNotification(context, notificationKey, notificationTitle, null, "Starting download...")
+
+        YoutubeDL.getInstance().execute(request, fileId, false) { progress, etaSeconds, line ->
+            val progressPercent = downloadProgressPercent(progress)
+            val now = SystemClock.elapsedRealtime()
+            val progressChanged = progressPercent != null && progressPercent != lastProgressPercent
+            if (progressChanged || now - lastProgressNotificationAt >= 1000L) {
+                lastProgressNotificationAt = now
+                if (progressPercent != null) lastProgressPercent = progressPercent
+                showDownloadProgressNotification(
+                    context = context,
+                    key = notificationKey,
+                    title = notificationTitle,
+                    progressPercent = progressPercent,
+                    detail = downloadProgressDetail(progressPercent, etaSeconds, line)
+                )
+            }
+        }
+
+        showDownloadProgressNotification(context, notificationKey, notificationTitle, 100, "Finalizing download...")
         val downloadedFile = destDir.listFiles()
             ?.filter { it.isFile && it.name.startsWith(fileId) && it.length() > 0L && !it.name.endsWith(".part") }
             ?.maxByOrNull { it.lastModified() }
-            ?: return null
+        if (downloadedFile == null) {
+            showDownloadFailedNotification(context, notificationKey, notificationTitle)
+            return null
+        }
 
         val mediaUri = Uri.fromFile(downloadedFile)
         val metadata = extractMediaMetadata(context, mediaUri, itemId, isVideo = true)
@@ -719,10 +884,18 @@ internal fun downloadVideoLinkToLibraryItem(context: Context, url: String, exist
             httpUserAgent = existingItem?.httpUserAgent ?: setupData?.httpUserAgent,
             httpReferer = existingItem?.httpReferer ?: setupData?.httpReferer
         )
-        mergeMetadataIntoItem(baseItem, metadata, fallbackTitle)
+        val mergedItem = mergeMetadataIntoItem(baseItem, metadata, fallbackTitle)
+        showDownloadCompleteNotification(context, notificationKey, mergedItem.title)
+        mergedItem
     } catch (t: Throwable) {
         t.printStackTrace()
         CrashReporter.recordHandled(context, "Download video link", t)
+        showDownloadFailedNotification(
+            context,
+            notificationKey,
+            notificationTitle,
+            cancelled = t is InterruptedException || t::class.java.simpleName.contains("Canceled", ignoreCase = true)
+        )
         null
     }
 }

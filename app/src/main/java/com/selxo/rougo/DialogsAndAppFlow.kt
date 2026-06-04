@@ -1,11 +1,15 @@
 package com.selxo.rougo
 
+import android.Manifest
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.os.Handler
 import android.util.Size
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -237,6 +241,7 @@ fun MainAppFlow(
 fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem) -> Unit) {
     val context = LocalContext.current
     val uiScope = rememberCoroutineScope()
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
     val sourceLabel = remember(url) { streamSourceLabel(url) }
     val isYoutubeSource = remember(url) { isYoutubeUrl(url) }
     val downloadBeforePlayback = remember(url) { isBilibiliUrl(url) || isNiconicoUrl(url) }
@@ -261,6 +266,9 @@ fun YtStreamDialog(url: String, onDismiss: () -> Unit, onComplete: (LibraryItem)
     LaunchedEffect(url) {
         try {
             if (downloadBeforePlayback) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPlayerNotificationPermission(context)) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
                 isProcessing = true
                 status = "Downloading $sourceLabel video..."
                 val downloadedItem = withContext(Dispatchers.IO) {

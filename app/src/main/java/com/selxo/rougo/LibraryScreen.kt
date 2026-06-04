@@ -1,8 +1,10 @@
 package com.selxo.rougo
 
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.util.Size
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -80,6 +82,7 @@ fun LibraryScreen(
     val context = LocalContext.current
     val importScope = rememberCoroutineScope()
     val libraryManager = remember { LibraryManager(context) }
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
 
     var showAddDialog by remember { mutableStateOf(false) }
     var pendingMediaUri by remember { mutableStateOf<Uri?>(null) }
@@ -98,6 +101,12 @@ fun LibraryScreen(
     var pendingDeleteItem by remember { mutableStateOf<LibraryItem?>(null) }
     var libraryControlsExpanded by remember { mutableStateOf(true) }
     val downloadStates = remember { mutableStateMapOf<String, LibraryDownloadState>() }
+
+    fun requestDownloadNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !hasPlayerNotificationPermission(context)) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     val filteredItems = remember(items, searchQuery, selectedFilter, sortMode) {
         val query = searchQuery.trim().lowercase(Locale.US)
@@ -380,9 +389,10 @@ fun LibraryScreen(
 
                             onDownload = if (canManageYoutubeDownload && !hasLocalCopy) {
                                 {
-                                    val sourceUrl = youtubeSourceUrl ?: return@LibraryCard
+                                    val sourceUrl = youtubeSourceUrl
 
                                     if (downloadState != LibraryDownloadState.Loading) {
+                                        requestDownloadNotificationPermissionIfNeeded()
                                         downloadStates[item.id] = LibraryDownloadState.Loading
                                         importScope.launch {
                                             val downloadedItem = withContext(Dispatchers.IO) {
@@ -502,6 +512,7 @@ fun LibraryScreen(
                     enabled = !isDownloadingLink && extractFirstUrl(linkText) != null,
                     onClick = {
                         val url = extractFirstUrl(linkText) ?: return@TextButton
+                        requestDownloadNotificationPermissionIfNeeded()
                         isDownloadingLink = true
                         importScope.launch {
                             val downloadedItem = withContext(Dispatchers.IO) {

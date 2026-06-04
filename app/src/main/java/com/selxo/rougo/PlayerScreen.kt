@@ -1,17 +1,23 @@
 package com.selxo.rougo
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.MediaMetadata
 import android.media.MediaPlayer as AndroidMediaPlayer
+import android.media.session.MediaSession
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.os.SystemClock
 import android.util.Size
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
@@ -138,6 +144,11 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     val lifecycleOwner = LocalLifecycleOwner.current
     val libVlc = remember { VLCManager.getLibVLC(context) }
     val vlcPlayer = remember { VLCMediaPlayer(libVlc) }
+    val mediaSession = remember {
+        MediaSession(context.applicationContext, "RougoPlayer").apply {
+            setFlags(MediaSession.FLAG_HANDLES_MEDIA_BUTTONS or MediaSession.FLAG_HANDLES_TRANSPORT_CONTROLS)
+        }
+    }
     var videoLayout by remember { mutableStateOf<VLCVideoLayout?>(null) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
@@ -179,6 +190,35 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    fun pauseMainPlayer() {
+        try { vlcPlayer.pause() } catch (e: Exception) { e.printStackTrace() }
+        isPlaying = false
+    }
+
+    fun rewindMainPlayerFromControls() {
+        if (isRecording) return
+        seekMainPlayer(vlcPlayer.time - skipDurationMs, resumeAfterSeek = vlcPlayer.isPlaying)
+    }
+
+    fun fastForwardMainPlayerFromControls() {
+        if (isRecording) return
+        seekMainPlayer(vlcPlayer.time + skipDurationMs, resumeAfterSeek = vlcPlayer.isPlaying)
+    }
+
+    fun stopMainPlayerFromControls() {
+        try {
+            vlcPlayer.pause()
+            vlcPlayer.time = 0L
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        currentPos = 0L
+        isPlaying = false
+        isPlayerNotificationVisible = false
+        mediaSession.isActive = false
+        cancelPlayerNotification(context)
     }
 
     fun openDictionaryLookup(query: String) {
@@ -259,31 +299,19 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                     ACTION_PLAYER_PLAY_PAUSE -> {
                         if (isRecording) return
                         if (vlcPlayer.isPlaying) {
-                            vlcPlayer.pause()
-                            isPlaying = false
+                            pauseMainPlayer()
                         } else {
                             playMainPlayer()
                         }
                     }
                     ACTION_PLAYER_REWIND -> {
-                        if (isRecording) return
-                        seekMainPlayer(vlcPlayer.time - skipDurationMs, resumeAfterSeek = vlcPlayer.isPlaying)
+                        rewindMainPlayerFromControls()
                     }
                     ACTION_PLAYER_FORWARD -> {
-                        if (isRecording) return
-                        seekMainPlayer(vlcPlayer.time + skipDurationMs, resumeAfterSeek = vlcPlayer.isPlaying)
+                        fastForwardMainPlayerFromControls()
                     }
                     ACTION_PLAYER_STOP -> {
-                        try {
-                            vlcPlayer.pause()
-                            vlcPlayer.time = 0L
-                        } catch (e: Exception) {
-                            e.printStackTrace()
-                        }
-                        currentPos = 0L
-                        isPlaying = false
-                        isPlayerNotificationVisible = false
-                        cancelPlayerNotification(context)
+                        stopMainPlayerFromControls()
                     }
                 }
             }
@@ -299,9 +327,126 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         }
     }
 
-    LaunchedEffect(isPlayerNotificationVisible, isPlaying, currentPos / 1000L, duration, libraryItem.title, libraryItem.artist, libraryItem.album, libraryItem.coverArtPath, skipSeconds) {
+    DisposableEffect(mediaSession) {
+        val flags = PendingIntent.FLAG_UPDATE_CURRENT or
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
+        mediaSession.setSessionActivity(
+            PendingIntent.getActivity(
+                context,
+                0,
+                Intent(context, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP),
+                flags
+            )
+        )
+        mediaSession.setCallback(
+            object : MediaSession.Callback() {
+                override fun onPlay() {
+                    if (!isRecording && actualMediaUri != null) playMainPlayer()
+                }
+
+                override fun onPause() {
+                    if (!isRecording) pauseMainPlayer()
+                }
+
+                override fun onStop() {
+                    stopMainPlayerFromControls()
+                }
+
+                override fun onSeekTo(pos: Long) {
+                    if (!isRecording) seekMainPlayer(pos, resumeAfterSeek = isPlaying)
+                }
+
+                override fun onRewind() {
+                    rewindMainPlayerFromControls()
+                }
+
+                override fun onFastForward() {
+                    fastForwardMainPlayerFromControls()
+                }
+            },
+            Handler(Looper.getMainLooper())
+        )
+
+        onDispose {
+            mediaSession.setCallback(null)
+            mediaSession.isActive = false
+        }
+    }
+
+    LaunchedEffect(
+        isPlayerNotificationVisible,
+        isPlaying,
+        currentPos / 1000L,
+        duration,
+        actualMediaUri,
+        libraryItem.title,
+        libraryItem.artist,
+        libraryItem.album,
+        libraryItem.albumArtist,
+        libraryItem.year,
+        libraryItem.coverArtPath,
+        skipSeconds
+    ) {
+        val notificationSubtitle = libraryItem.metadataSummary()
+        val artwork = libraryItem.coverArtPath?.let { decodeSampledBitmapFile(it, maxSize = 512) }
+        val metadata = MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, libraryItem.title)
+            .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, libraryItem.title)
+            .putLong(MediaMetadata.METADATA_KEY_DURATION, duration.coerceAtLeast(0L))
+            .apply {
+                notificationSubtitle?.let {
+                    putString(MediaMetadata.METADATA_KEY_ARTIST, it)
+                    putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, it)
+                }
+                artwork?.let {
+                    putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, it)
+                    putBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON, it)
+                }
+            }
+            .build()
+        mediaSession.setMetadata(metadata)
+
+        val basePlaybackActions = PlaybackState.ACTION_PLAY or
+            PlaybackState.ACTION_PAUSE or
+            PlaybackState.ACTION_PLAY_PAUSE or
+            PlaybackState.ACTION_REWIND or
+            PlaybackState.ACTION_FAST_FORWARD or
+            PlaybackState.ACTION_STOP
+        val playbackActions = if (duration > 0L) {
+            basePlaybackActions or PlaybackState.ACTION_SEEK_TO
+        } else {
+            basePlaybackActions
+        }
+        val playbackState = when {
+            actualMediaUri == null || !isPlayerNotificationVisible -> PlaybackState.STATE_STOPPED
+            isPlaying -> PlaybackState.STATE_PLAYING
+            else -> PlaybackState.STATE_PAUSED
+        }
+        mediaSession.setPlaybackState(
+            PlaybackState.Builder()
+                .setActions(playbackActions)
+                .setState(
+                    playbackState,
+                    currentPos.coerceAtLeast(0L),
+                    if (isPlaying) 1f else 0f,
+                    SystemClock.elapsedRealtime()
+                )
+                .build()
+        )
+        mediaSession.isActive = actualMediaUri != null && isPlayerNotificationVisible
+
         if (isPlayerNotificationVisible && actualMediaUri != null) {
-            showPlayerNotification(context, libraryItem.title, libraryItem.metadataSummary(), libraryItem.coverArtPath, currentPos, duration, isPlaying, skipSeconds)
+            showPlayerNotification(
+                context = context,
+                title = libraryItem.title,
+                subtitle = notificationSubtitle,
+                coverArtPath = libraryItem.coverArtPath,
+                currentPos = currentPos,
+                duration = duration,
+                isPlaying = isPlaying,
+                skipSeconds = skipSeconds,
+                mediaSessionToken = mediaSession.sessionToken
+            )
         } else {
             cancelPlayerNotification(context)
         }
@@ -482,6 +627,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
             try { vlcPlayer.release() } catch (e: Exception) {}
             try { voiceAudioPlayer.release() } catch (e: Exception) {}
             try { shadowAudioRecorder?.release() } catch (e: Exception) {}
+            try { mediaSession.release() } catch (e: Exception) {}
             temporaryRepeatAttemptPaths.toList().forEach { deleteTemporaryRepeatAttempt(it) }
         }
     }
