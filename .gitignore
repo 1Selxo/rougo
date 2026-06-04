@@ -17,6 +17,7 @@ app/Aud1/
 AGENTS.override.md
 PLANS.md
 BUILDING.md
-screenshots/
+/screenshots/
+media/draft/
 /hoshidicts/build/
 /local-build-install.sh
