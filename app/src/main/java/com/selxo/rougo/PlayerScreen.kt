@@ -116,6 +116,8 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
     var showBacklog by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
+    var embeddedSubtitlesEnabled by remember(libraryItem.id) { mutableStateOf(libraryItem.subtitleUri != null) }
+    var selectedEmbeddedSubtitleTrackId by remember(libraryItem.id) { mutableIntStateOf(-1) }
 
     val initialPlayableUri = remember(libraryItem.id) { initialPlayableMediaUri(libraryItem) }
     var actualMediaUri by remember(libraryItem.id) { mutableStateOf(initialPlayableUri) }
@@ -185,6 +187,50 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         resumePlaybackAfterDictionaryDismiss = false
         if (shouldResumeAfterDismiss && actualMediaUri != null && !vlcPlayer.isPlaying) {
             playMainPlayer()
+        }
+    }
+
+    fun toggleRepeatPractice(segment: ShadowRecording, collapseBacklogOnStart: Boolean = false) {
+        if (repeatPracticeSegment?.id == segment.id) {
+            repeatPracticeSegment = null
+        } else {
+            activeOriginalSegment = null
+            repeatAttemptCount = 0
+            repeatPracticeSegment = segment
+            if (collapseBacklogOnStart) showBacklog = false
+        }
+    }
+
+    fun syncEmbeddedSubtitleState(spuTracks: Array<org.videolan.libvlc.MediaPlayer.TrackDescription>) {
+        val currentTrackId = runCatching { vlcPlayer.spuTrack }.getOrDefault(-1)
+        if (currentTrackId != -1) {
+            selectedEmbeddedSubtitleTrackId = currentTrackId
+            embeddedSubtitlesEnabled = true
+        } else if (libraryItem.subtitleUri != null) {
+            embeddedSubtitlesEnabled = isSubtitlesVisible
+        } else if (spuTracks.any { it.id != -1 }) {
+            embeddedSubtitlesEnabled = false
+        }
+    }
+
+    fun setEmbeddedSubtitlesEnabled(
+        enabled: Boolean,
+        spuTracks: Array<org.videolan.libvlc.MediaPlayer.TrackDescription>
+    ) {
+        if (enabled) {
+            val trackId = selectedEmbeddedSubtitleTrackId
+                .takeIf { it != -1 && spuTracks.any { track -> track.id == it } }
+                ?: spuTracks.firstOrNull { it.id != -1 }?.id
+            if (trackId != null) {
+                vlcPlayer.spuTrack = trackId
+                selectedEmbeddedSubtitleTrackId = trackId
+            }
+            isSubtitlesVisible = true
+            embeddedSubtitlesEnabled = true
+        } else {
+            vlcPlayer.spuTrack = -1
+            isSubtitlesVisible = false
+            embeddedSubtitlesEnabled = false
         }
     }
 
@@ -433,6 +479,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                 val updatedItem = libraryItem.copy(subtitleUri = subtitleUri)
                 libraryItem = updatedItem
                 isSubtitlesVisible = true
+                embeddedSubtitlesEnabled = true
                 selectedYoutubeSubtitleKey = null
                 LibraryManager(context).saveItem(updatedItem)
             }
@@ -773,6 +820,8 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                     if (uri != null) {
                         context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
                         libraryItem = libraryItem.copy(subtitleUri = uri.toString())
+                        isSubtitlesVisible = true
+                        embeddedSubtitlesEnabled = true
                     }
                 }
 
@@ -812,7 +861,10 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                         )
 
                         LaunchedEffect(showSubMenu) {
-                            if (showSubMenu) spuTracks = vlcPlayer.spuTracks ?: emptyArray()
+                            if (showSubMenu) {
+                                spuTracks = vlcPlayer.spuTracks ?: emptyArray()
+                                syncEmbeddedSubtitleState(spuTracks)
+                            }
                         }
 
                         LaunchedEffect(showSubMenu, libraryItem.sourceUrl) {
@@ -865,6 +917,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                                                 if (subtitleUri != null) {
                                                     libraryItem = libraryItem.copy(subtitleUri = subtitleUri)
                                                     isSubtitlesVisible = true
+                                                    embeddedSubtitlesEnabled = true
                                                     LibraryManager(context).saveItem(libraryItem)
                                                 } else {
                                                     Toast.makeText(context, "Subtitle download failed.", Toast.LENGTH_SHORT).show()
@@ -895,6 +948,8 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                                     onClick = {
                                         vlcPlayer.spuTrack = track.id
                                         isSubtitlesVisible = true
+                                        embeddedSubtitlesEnabled = true
+                                        selectedEmbeddedSubtitleTrackId = track.id
                                         showSubMenu = false
                                     }
                                 )
@@ -902,10 +957,9 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                         }
 
                         DropdownMenuItem(
-                            text = { Text("Disable Embedded Subs") },
+                            text = { Text(if (embeddedSubtitlesEnabled) "Disable Embedded Subs" else "Enable Embedded Subs") },
                             onClick = {
-                                vlcPlayer.spuTrack = -1
-                                isSubtitlesVisible = false
+                                setEmbeddedSubtitlesEnabled(!embeddedSubtitlesEnabled, spuTracks)
                                 showSubMenu = false
                             }
                         )
@@ -1116,7 +1170,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             onSeekOriginal = { targetMs -> seekMainPlayer(targetMs, resumeAfterSeek = false) },
                             onSeekVoice = { targetMs -> seekVoiceSegment(latest, targetMs) },
                             onRepeatPractice = {
-                                repeatPracticeSegment = if (repeatPracticeSegment?.id == latest.id) null else latest
+                                toggleRepeatPractice(latest)
                             },
                             onDelete = {
                                 try { File(latest.filePath).delete() } catch (e: Exception) {}
@@ -1174,7 +1228,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             onSeekOriginal = { targetMs -> seekMainPlayer(targetMs, resumeAfterSeek = false) },
                             onSeekVoice = { targetMs -> seekVoiceSegment(rec, targetMs) },
                             onRepeatPractice = {
-                                repeatPracticeSegment = if (repeatPracticeSegment?.id == rec.id) null else rec
+                                toggleRepeatPractice(rec, collapseBacklogOnStart = true)
                             },
                             onDelete = {
                                 try { File(rec.filePath).delete() } catch (e: Exception) {}
