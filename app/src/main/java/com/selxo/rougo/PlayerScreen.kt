@@ -54,15 +54,19 @@ import androidx.lifecycle.LifecycleEventObserver
 import java.io.File
 import java.net.URL
 import java.util.Locale
+import kotlin.coroutines.resume
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.videolan.libvlc.LibVLC
 import org.videolan.libvlc.Media as VLCMedia
 import org.videolan.libvlc.MediaPlayer as VLCMediaPlayer
 import org.videolan.libvlc.util.VLCVideoLayout
+
+private enum class RepeatPracticePhase { Idle, RecordingAttempt, PlayingAttempt }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -113,6 +117,12 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     var activeOriginalSegment by remember { mutableStateOf<ShadowRecording?>(null) }
     var repeatPracticeSegment by remember { mutableStateOf<ShadowRecording?>(null) }
     var repeatAttemptCount by remember { mutableIntStateOf(0) }
+    var repeatPracticePhase by remember { mutableStateOf(RepeatPracticePhase.Idle) }
+    var saveRepeatRecordings by remember {
+        mutableStateOf(prefs.getBoolean(PREF_SAVE_REPEAT_RECORDINGS, true))
+    }
+    val latestSaveRepeatRecordings = rememberUpdatedState(saveRepeatRecordings)
+    val temporaryRepeatAttemptPaths = remember { mutableStateListOf<String>() }
 
     var showBacklog by remember { mutableStateOf(false) }
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = false)
@@ -193,9 +203,11 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     fun toggleRepeatPractice(segment: ShadowRecording, collapseBacklogOnStart: Boolean = false) {
         if (repeatPracticeSegment?.id == segment.id) {
             repeatPracticeSegment = null
+            repeatPracticePhase = RepeatPracticePhase.Idle
         } else {
             activeOriginalSegment = null
             repeatAttemptCount = 0
+            repeatPracticePhase = RepeatPracticePhase.Idle
             repeatPracticeSegment = segment
             if (collapseBacklogOnStart) showBacklog = false
         }
@@ -369,7 +381,24 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     }
     var activeVoiceSegmentId by remember { mutableStateOf<String?>(null) }
 
-    fun playVoiceSegment(segment: ShadowRecording, startAtMs: Long = 0L) {
+    fun deleteTemporaryRepeatAttempt(path: String) {
+        if (path.isBlank()) return
+        temporaryRepeatAttemptPaths.remove(path)
+        try { File(path).delete() } catch (e: Exception) {}
+    }
+
+    fun stopVoicePlayback() {
+        try { voiceAudioPlayer.stop() } catch (e: Exception) {}
+        try { voiceAudioPlayer.reset() } catch (e: Exception) {}
+        activeVoiceSegmentId = null
+        voiceCurrentPos = -1L
+    }
+
+    fun playVoiceSegment(
+        segment: ShadowRecording,
+        startAtMs: Long = 0L,
+        onPlaybackEnded: ((Boolean) -> Unit)? = null
+    ) {
         try {
             voiceAudioPlayer.apply {
                 reset()
@@ -383,14 +412,37 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                 setOnCompletionListener {
                     activeVoiceSegmentId = null
                     voiceCurrentPos = -1L
+                    onPlaybackEnded?.invoke(true)
+                }
+                setOnErrorListener { _, _, _ ->
+                    activeVoiceSegmentId = null
+                    voiceCurrentPos = -1L
+                    onPlaybackEnded?.invoke(false)
+                    true
                 }
                 prepareAsync()
             }
         } catch (e: Exception) {
             activeVoiceSegmentId = null
             Toast.makeText(context, "Error playing audio", Toast.LENGTH_SHORT).show()
+            onPlaybackEnded?.invoke(false)
         }
     }
+
+    suspend fun playVoiceSegmentUntilComplete(segment: ShadowRecording): Boolean =
+        suspendCancellableCoroutine { continuation ->
+            var didResume = false
+            fun finish(success: Boolean) {
+                if (!didResume) {
+                    didResume = true
+                    if (continuation.isActive) continuation.resume(success)
+                }
+            }
+
+            continuation.invokeOnCancellation { stopVoicePlayback() }
+
+            playVoiceSegment(segment, onPlaybackEnded = ::finish)
+        }
 
     fun toggleVoiceSegment(segment: ShadowRecording) {
         if (activeVoiceSegmentId == segment.id) {
@@ -424,6 +476,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
             try { vlcPlayer.release() } catch (e: Exception) {}
             try { voiceAudioPlayer.release() } catch (e: Exception) {}
             try { shadowAudioRecorder?.release() } catch (e: Exception) {}
+            temporaryRepeatAttemptPaths.toList().forEach { deleteTemporaryRepeatAttempt(it) }
         }
     }
 
@@ -658,9 +711,10 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         startTimeOverride: Long? = null,
         endTimeOverride: Long? = null,
         pausePlayer: Boolean = true,
-        showShortToast: Boolean = true
-    ): Boolean {
-        val recorder = shadowAudioRecorder ?: return false
+        showShortToast: Boolean = true,
+        saveRecording: Boolean = true
+    ): ShadowRecording? {
+        val recorder = shadowAudioRecorder ?: return null
         val endTime = endTimeOverride ?: vlcPlayer.time
         var success = true
         try {
@@ -676,14 +730,17 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
         val startTime = startTimeOverride ?: recordStartTime
         if (success && endTime > startTime + MIN_SHADOW_SEGMENT_MS) {
-            recordings.add(0, ShadowRecording(filePath = currentFilePath, startTime = startTime, endTime = endTime))
-            syncWithStorage()
+            val recording = ShadowRecording(filePath = currentFilePath, startTime = startTime, endTime = endTime)
+            if (saveRecording) {
+                recordings.add(0, recording)
+                syncWithStorage()
+            }
+            return recording
         } else {
             if (success && showShortToast) Toast.makeText(context, "Recording segment was too short.", Toast.LENGTH_SHORT).show()
             try { File(currentFilePath).delete() } catch (e: Exception) {}
-            success = false
         }
-        return success
+        return null
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { isGranted ->
@@ -704,13 +761,27 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         }
 
         repeatAttemptCount = 0
+        repeatPracticePhase = RepeatPracticePhase.Idle
         activeOriginalSegment = null
+        stopVoicePlayback()
+        val sessionTemporaryAttemptPaths = mutableSetOf<String>()
+
+        fun trackTemporaryAttempt(path: String) {
+            temporaryRepeatAttemptPaths.add(path)
+            sessionTemporaryAttemptPaths.add(path)
+        }
+
+        fun deleteSessionTemporaryAttempt(path: String) {
+            sessionTemporaryAttemptPaths.remove(path)
+            deleteTemporaryRepeatAttempt(path)
+        }
 
         try {
             while (repeatPracticeSegment?.id == segment.id) {
                 val file = File(context.getExternalFilesDir(Environment.DIRECTORY_MUSIC), "Shadowing_${System.currentTimeMillis()}.m4a")
                 tempFilePath = file.absolutePath
                 recordStartTime = segment.startTime
+                repeatPracticePhase = RepeatPracticePhase.RecordingAttempt
 
                 vlcPlayer.time = segment.startTime
                 if (!startRecordingToFile(file)) {
@@ -737,27 +808,48 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
                 if (repeatPracticeSegment?.id != segment.id) break
 
-                stopRecordingSafe(
+                val shouldSaveAttempt = latestSaveRepeatRecordings.value
+                val attempt = stopRecordingSafe(
                     currentFilePath = file.absolutePath,
                     startTimeOverride = segment.startTime,
                     endTimeOverride = segment.endTime,
                     pausePlayer = true,
-                    showShortToast = false
+                    showShortToast = false,
+                    saveRecording = shouldSaveAttempt
                 )
-                repeatAttemptCount += 1
-                delay(350)
+                if (attempt != null) {
+                    repeatAttemptCount += 1
+                    if (!shouldSaveAttempt) trackTemporaryAttempt(attempt.filePath)
+
+                    if (repeatPracticeSegment?.id != segment.id) break
+
+                    repeatPracticePhase = RepeatPracticePhase.PlayingAttempt
+                    playVoiceSegmentUntilComplete(attempt)
+                    if (!shouldSaveAttempt) deleteSessionTemporaryAttempt(attempt.filePath)
+                }
             }
         } finally {
             if (shadowAudioRecorder != null && tempFilePath.isNotBlank()) {
-                stopRecordingSafe(
+                val shouldSavePartialAttempt = latestSaveRepeatRecordings.value
+                val partialAttempt = stopRecordingSafe(
                     currentFilePath = tempFilePath,
                     startTimeOverride = segment.startTime,
                     endTimeOverride = vlcPlayer.time.coerceAtLeast(segment.startTime),
                     pausePlayer = true,
-                    showShortToast = false
+                    showShortToast = false,
+                    saveRecording = shouldSavePartialAttempt
                 )
+                if (partialAttempt != null && !shouldSavePartialAttempt) deleteSessionTemporaryAttempt(partialAttempt.filePath)
             }
             try { vlcPlayer.pause() } catch (e: Exception) {}
+            if (repeatPracticePhase == RepeatPracticePhase.PlayingAttempt) {
+                stopVoicePlayback()
+            }
+            sessionTemporaryAttemptPaths.toList().forEach { deleteTemporaryRepeatAttempt(it) }
+            if (repeatPracticeSegment == null || repeatPracticeSegment?.id == segment.id) {
+                repeatPracticePhase = RepeatPracticePhase.Idle
+            }
+            tempFilePath = ""
         }
     }
 
@@ -1023,13 +1115,13 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                             onValueChange = {
                                 seekMainPlayer(it.toLong(), resumeAfterSeek = isPlaying)
                             },
-                            enabled = !isRecording,
+                            enabled = !isRecording && repeatPracticeSegment == null,
                             valueRange = 0f..duration.toFloat().coerceAtLeast(1f), modifier = Modifier.weight(1f).padding(horizontal = 8.dp)
                         )
                         Text(formatTime(duration), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                     }
 
-                    if (!isRecording) {
+                    if (!isRecording && repeatPracticeSegment == null) {
                         Row(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                             IconButton(onClick = {
                                 seekMainPlayer(currentPos - skipDurationMs, resumeAfterSeek = isPlaying)
@@ -1075,27 +1167,62 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                     }
 
                     repeatPracticeSegment?.let { segment ->
+                        val repeatStatus = when (repeatPracticePhase) {
+                            RepeatPracticePhase.RecordingAttempt -> "Recording with source"
+                            RepeatPracticePhase.PlayingAttempt -> "Playing attempt"
+                            RepeatPracticePhase.Idle -> "Starting"
+                        }
                         Surface(
                             modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                             shape = RoundedCornerShape(12.dp)
                         ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                            Column(
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
                             ) {
-                                Icon(Icons.Default.Repeat, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                Spacer(Modifier.width(8.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(Icons.Default.Repeat, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text(
+                                        "Repeating ${formatTime(segment.startTime)} - ${formatTime(segment.endTime)}  Attempts: $repeatAttemptCount",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.weight(1f),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    TextButton(onClick = {
+                                        repeatPracticeSegment = null
+                                        repeatPracticePhase = RepeatPracticePhase.Idle
+                                    }, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                                        Text("Stop", color = Color(0xFFFF8A80), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
+                                Spacer(Modifier.height(4.dp))
                                 Text(
-                                    "Repeating ${formatTime(segment.startTime)} - ${formatTime(segment.endTime)}  Attempts: $repeatAttemptCount",
-                                    color = MaterialTheme.colorScheme.onSurface,
+                                    repeatStatus,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     fontSize = 12.sp,
-                                    modifier = Modifier.weight(1f),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                TextButton(onClick = { repeatPracticeSegment = null }, contentPadding = PaddingValues(horizontal = 8.dp)) {
-                                    Text("Stop", color = Color(0xFFFF8A80), fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(4.dp))
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Text(
+                                        "Save repeat recordings",
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                        fontSize = 12.sp,
+                                        modifier = Modifier.weight(1f).padding(end = 8.dp),
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                    Switch(
+                                        checked = saveRepeatRecordings,
+                                        onCheckedChange = {
+                                            saveRepeatRecordings = it
+                                            prefs.edit { putBoolean(PREF_SAVE_REPEAT_RECORDINGS, it) }
+                                        }
+                                    )
                                 }
                             }
                         }
@@ -1105,6 +1232,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                         onClick = {
                             if (repeatPracticeSegment != null) {
                                 repeatPracticeSegment = null
+                                repeatPracticePhase = RepeatPracticePhase.Idle
                             } else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
                                 permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             } else {
@@ -1144,7 +1272,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
                     }
                 }
 
-                if (recordings.isNotEmpty() && !isRecording) {
+                if (recordings.isNotEmpty() && !isRecording && repeatPracticeSegment == null) {
                     item {
                         Spacer(modifier = Modifier.height(12.dp))
                         Row(modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
