@@ -504,14 +504,26 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         }
     }
 
-    fun syncWithStorage() {
-        val updatedItem = libraryItem.copy(
+    fun playbackStorageItem(): LibraryItem {
+        val decision = decidePlaybackStorageItem(
+            item = libraryItem,
             progress = currentPos,
             duration = duration,
             recordings = recordings.toList(),
-            mediaUri = libraryItem.persistableMediaUri(actualMediaUri)
+            actualMediaUri = actualMediaUri
         )
-        LibraryManager(context).saveItem(updatedItem)
+        if (decision.blockedRecordingMediaUri) {
+            CrashReporter.recordHandled(
+                context,
+                "Recording persistence guard",
+                IllegalStateException("Blocked recording media URI from replacing source media URI")
+            )
+        }
+        return decision.item
+    }
+
+    fun syncWithStorage() {
+        LibraryManager(context).saveItem(playbackStorageItem())
     }
 
     var voiceCurrentPos by remember { mutableLongStateOf(-1L) }
@@ -634,8 +646,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
     }
 
     BackHandler {
-        val updatedItem = libraryItem.copy(progress = currentPos, duration = duration, recordings = recordings.toList(), mediaUri = libraryItem.persistableMediaUri(actualMediaUri))
-        onBack(updatedItem)
+        onBack(playbackStorageItem())
     }
 
     LaunchedEffect(activeOriginalSegment) {
@@ -832,13 +843,21 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
         }
 
         onDispose {
-            val updatedItem = libraryItem.copy(
+            val decision = decidePlaybackStorageItem(
+                item = libraryItem,
                 progress = vlcPlayer.time.coerceAtLeast(0),
                 duration = if (vlcPlayer.length > 0) vlcPlayer.length else duration,
                 recordings = recordings.toList(),
-                mediaUri = libraryItem.persistableMediaUri(actualMediaUri)
+                actualMediaUri = actualMediaUri
             )
-            LibraryManager(context).saveItem(updatedItem)
+            if (decision.blockedRecordingMediaUri) {
+                CrashReporter.recordHandled(
+                    context,
+                    "Recording persistence guard",
+                    IllegalStateException("Blocked recording media URI from replacing source media URI")
+                )
+            }
+            LibraryManager(context).saveItem(decision.item)
 
             try { vlcPlayer.stop() } catch (e: Exception) {}
             try { vlcPlayer.detachViews() } catch (e: Exception) {}
@@ -1050,8 +1069,7 @@ fun PlayerScreen(initialLibraryItem: LibraryItem, onBack: (LibraryItem) -> Unit)
 
         Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = {
-                val updatedItem = libraryItem.copy(progress = currentPos, duration = duration, recordings = recordings.toList(), mediaUri = libraryItem.persistableMediaUri(actualMediaUri))
-                onBack(updatedItem)
+                onBack(playbackStorageItem())
             }) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.common_back), tint = MaterialTheme.colorScheme.onBackground)
             }
