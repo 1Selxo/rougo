@@ -211,7 +211,8 @@ fun LibraryCard(
     onDelete: () -> Unit,
     onDownload: (() -> Unit)? = null,
     onDeleteDownload: (() -> Unit)? = null,
-    downloadState: LibraryDownloadState = LibraryDownloadState.Idle
+    downloadState: LibraryDownloadState = LibraryDownloadState.Idle,
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
     val progressPct = if (item.duration > 0) (item.progress.toFloat() / item.duration.toFloat()) else 0f
@@ -221,7 +222,7 @@ fun LibraryCard(
     var showDownloadMenu by remember { mutableStateOf(false) }
 
     Card(
-        modifier = Modifier.fillMaxWidth().clickable { onClick() },
+        modifier = modifier.fillMaxWidth().clickable { onClick() },
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         shape = RoundedCornerShape(8.dp)
     ) {

@@ -66,6 +66,7 @@
     <string name="library_video_url_label">Video URL</string>
     <string name="library_url_placeholder">https://...</string>
     <string name="library_recordings_count">%1$d recordings</string>
+    <string name="library_playlist_items_count">%1$d videos</string>
     <string name="library_progress_percent">%1$d%%</string>
     <string name="library_has_subtitles">Subtitles</string>
     <string name="library_no_subtitles">No subtitles</string>
@@ -75,6 +76,7 @@
     <string name="media_source_audio">Audio</string>
     <string name="media_source_video">Video</string>
     <string name="media_source_stream">Stream</string>
+    <string name="media_source_playlist">Playlist</string>
     <string name="media_source_youtube">YouTube</string>
     <string name="media_source_bilibili">Bilibili</string>
     <string name="media_source_niconico">Niconico</string>

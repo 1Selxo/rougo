@@ -25,7 +25,11 @@ class LibraryManager(context: Context) {
         for (i in 0 until jsonArray.length()) {
             try {
                 val obj = jsonArray.getJSONObject(i)
-                val mediaUri = obj.optString("mediaUri").takeIf { it.isNotBlank() } ?: continue
+                val itemKind = runCatching {
+                    LibraryItemKind.valueOf(obj.optString("itemKind", LibraryItemKind.Media.name))
+                }.getOrDefault(LibraryItemKind.Media)
+                val mediaUri = obj.optString("mediaUri").takeIf { it.isNotBlank() }
+                    ?: if (itemKind == LibraryItemKind.Playlist) "" else continue
 
                 val recordingsList = mutableListOf<ShadowRecording>()
                 if (obj.has("recordings")) {
@@ -68,7 +72,11 @@ class LibraryManager(context: Context) {
                         year = obj.optCleanString("year"),
                         coverArtPath = obj.optCleanString("coverArtPath"),
                         httpUserAgent = obj.optCleanString("httpUserAgent"),
-                        httpReferer = obj.optCleanString("httpReferer")
+                        httpReferer = obj.optCleanString("httpReferer"),
+                        itemKind = itemKind,
+                        parentId = obj.optString("parentId").takeIf { it.isNotBlank() },
+                        playlistSourceUrl = obj.optString("playlistSourceUrl").takeIf { it.isNotBlank() },
+                        playlistItemIndex = obj.optInt("playlistItemIndex", 0)
                     )
                 )
             } catch (e: Exception) {
@@ -87,10 +95,10 @@ class LibraryManager(context: Context) {
 
     fun deleteItem(id: String) {
         val items = getItems()
-        items.firstOrNull { it.id == id }?.let { item ->
+        items.filter { it.id == id || it.parentId == id }.forEach { item ->
             deleteLibraryItemAssociatedFiles(appContext, item)
         }
-        prefs.edit { putString("items", itemsToJson(items.filter { it.id != id }).toString()) }
+        prefs.edit { putString("items", itemsToJson(items.filter { it.id != id && it.parentId != id }).toString()) }
     }
 
     private fun itemsToJson(items: List<LibraryItem>): JSONArray {
@@ -109,6 +117,9 @@ class LibraryManager(context: Context) {
         obj.put("albumArtist", item.albumArtist ?: ""); obj.put("genre", item.genre ?: "")
         obj.put("year", item.year ?: ""); obj.put("coverArtPath", item.coverArtPath ?: "")
         obj.put("httpUserAgent", item.httpUserAgent ?: ""); obj.put("httpReferer", item.httpReferer ?: "")
+        obj.put("itemKind", item.itemKind.name); obj.put("parentId", item.parentId ?: "")
+        obj.put("playlistSourceUrl", item.playlistSourceUrl ?: "")
+        obj.put("playlistItemIndex", item.playlistItemIndex)
 
         val recArray = JSONArray()
         item.recordings.forEach { rec ->

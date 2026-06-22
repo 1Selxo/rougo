@@ -10,12 +10,14 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.PlaylistPlay
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -32,7 +34,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import java.io.File
 import java.net.URL
-import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -67,6 +68,63 @@ private fun LibraryControlsCollapseHandle(
             modifier = Modifier.weight(1f),
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f)
         )
+    }
+}
+
+@Composable
+private fun LibraryPlaylistGroupCard(
+    item: LibraryItem,
+    childCount: Int,
+    onDelete: () -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        shape = RoundedCornerShape(8.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier.size(52.dp).clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.Default.Folder,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(30.dp)
+                )
+            }
+            Spacer(Modifier.width(14.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    item.title,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 2,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(6.dp))
+                AssistChip(
+                    onClick = {},
+                    enabled = false,
+                    label = { Text(stringResource(R.string.library_playlist_items_count, childCount), fontSize = 11.sp) },
+                    leadingIcon = {
+                        Icon(Icons.AutoMirrored.Filled.PlaylistPlay, contentDescription = null, modifier = Modifier.size(14.dp))
+                    }
+                )
+            }
+            IconButton(onClick = onDelete, modifier = Modifier.size(44.dp)) {
+                Icon(
+                    Icons.Default.Delete,
+                    contentDescription = stringResource(R.string.common_delete),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
     }
 }
 @OptIn(ExperimentalMaterial3Api::class)
@@ -130,30 +188,13 @@ fun LibraryScreen(
         }
     }
 
-    val filteredItems = remember(items, searchQuery, selectedFilter, sortMode) {
-        val query = searchQuery.trim().lowercase(Locale.US)
-        val base = items.filter { item ->
-            val matchesQuery = query.isEmpty() || item.title.lowercase(Locale.US).contains(query)
-            val matchesFilter = when (selectedFilter) {
-                "Audio" -> !item.isVideo
-                "Video" -> item.isVideo
-                "YouTube" -> item.sourceUrl != null
-                "Local" -> item.sourceUrl == null
-                else -> true
-            }
-            matchesQuery && matchesFilter
-        }
-
-        when (sortMode) {
-            "Title" -> base.sortedBy { it.title.lowercase(Locale.US) }
-            "Progress" -> base.sortedByDescending { if (it.duration > 0L) it.progress.toFloat() / it.duration.toFloat() else 0f }
-            "Recordings" -> base.sortedByDescending { it.recordings.size }
-            else -> base
-        }
+    val displayRows = remember(items, searchQuery, selectedFilter, sortMode) {
+        libraryDisplayRows(items, searchQuery, selectedFilter, sortMode)
     }
 
     val totalRecordings = remember(items) { items.sumOf { it.recordings.size } }
     val inProgressCount = remember(items) { items.count { it.duration > 0L && it.progress > 0L } }
+    val mediaItemCount = remember(items) { libraryMediaItemCount(items) }
 
     LaunchedEffect(items) {
         if (attemptedMetadataRefresh) return@LaunchedEffect
@@ -246,7 +287,7 @@ fun LibraryScreen(
                 Column {
                     Text(stringResource(R.string.library_title), fontSize = 30.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
                     Text(
-                        stringResource(R.string.library_summary, items.size, inProgressCount, totalRecordings),
+                        stringResource(R.string.library_summary, mediaItemCount, inProgressCount, totalRecordings),
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         fontSize = 12.sp
                     )
@@ -369,13 +410,30 @@ fun LibraryScreen(
                         )
                     }
                 }
-            } else if (filteredItems.isEmpty()) {
+            } else if (displayRows.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text(stringResource(R.string.library_no_matching_items), color = MaterialTheme.colorScheme.onSurfaceVariant, textAlign = TextAlign.Center)
                 }
             } else {
                 LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(filteredItems, key = { it.id }) { item ->
+                    items(
+                        displayRows,
+                        key = { row ->
+                            when (row) {
+                                is LibraryDisplayRow.PlaylistGroup -> row.item.id
+                                is LibraryDisplayRow.Media -> row.item.id
+                            }
+                        }
+                    ) { row ->
+                        if (row is LibraryDisplayRow.PlaylistGroup) {
+                            LibraryPlaylistGroupCard(
+                                item = row.item,
+                                childCount = row.childCount,
+                                onDelete = { requestDeleteItem(row.item) }
+                            )
+                            return@items
+                        }
+                        val item = (row as LibraryDisplayRow.Media).item
                         val hasLocalCopy = item.hasDownloadedLocalCopy()
                         val youtubeSourceUrl = item.sourceUrl?.takeIf { isYoutubeUrl(it) }
                         val canManageYoutubeDownload = youtubeSourceUrl != null
@@ -392,6 +450,7 @@ fun LibraryScreen(
                             onClick = { onItemClick(item) },
                             onDelete = { requestDeleteItem(item) },
                             downloadState = downloadState,
+                            modifier = if (row.isPlaylistChild) Modifier.padding(start = 18.dp) else Modifier,
 
                             onDeleteDownload = if (canManageYoutubeDownload && hasLocalCopy) {
                                 {

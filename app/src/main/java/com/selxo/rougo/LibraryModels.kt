@@ -15,6 +15,7 @@ data class ShadowRecording(
     val id: String = UUID.randomUUID().toString(),
     val filePath: String, val startTime: Long, val endTime: Long, val timestamp: Long = System.currentTimeMillis()
 )
+enum class LibraryItemKind { Media, Playlist }
 data class LibraryItem(
     val id: String, val title: String, val mediaUri: String,
     val subtitleUri: String?, var progress: Long, var duration: Long, val isVideo: Boolean,
@@ -22,7 +23,11 @@ data class LibraryItem(
     val sourceUrl: String? = null, val formatId: String? = null,
     val artist: String? = null, val album: String? = null, val albumArtist: String? = null,
     val genre: String? = null, val year: String? = null, val coverArtPath: String? = null,
-    val httpUserAgent: String? = null, val httpReferer: String? = null
+    val httpUserAgent: String? = null, val httpReferer: String? = null,
+    val itemKind: LibraryItemKind = LibraryItemKind.Media,
+    val parentId: String? = null,
+    val playlistSourceUrl: String? = null,
+    val playlistItemIndex: Int = 0
 )
 data class SubtitleCue(val startMs: Long, val endMs: Long, val text: String)
 internal data class MediaMetadataSnapshot(
@@ -57,6 +62,7 @@ internal fun LibraryItem.metadataSummary(): String? {
     ).distinct().joinToString(" / ").takeIf { it.isNotBlank() }
 }
 internal fun LibraryItem.needsLocalMetadataRefresh(): Boolean {
+    if (itemKind != LibraryItemKind.Media) return false
     if (sourceUrl != null && !hasDownloadedLocalCopy()) return false
     val hasCover = coverArtPath?.let { File(it).exists() && File(it).length() > 0L } == true
     return !hasCover || metadataSummary() == null || duration <= 0L
@@ -66,10 +72,12 @@ internal fun isLocalMediaUriValue(value: String): Boolean {
     return scheme.isNullOrBlank() || scheme == "file" || scheme == "content"
 }
 internal fun LibraryItem.hasDownloadedLocalCopy(): Boolean {
+    if (itemKind != LibraryItemKind.Media) return false
     val media = mediaUri.trim()
     val source = sourceUrl?.trim().orEmpty()
     return source.isNotBlank() && media.isNotBlank() && media != source && isLocalMediaUriValue(media)
 }
+internal fun LibraryItem.isPlaylistGroup(): Boolean = itemKind == LibraryItemKind.Playlist
 internal fun deleteDownloadedLocalCopy(context: Context, item: LibraryItem): LibraryItem? {
     val source = item.sourceUrl?.trim()?.takeIf { it.isNotBlank() } ?: return null
     if (!item.hasDownloadedLocalCopy()) return null
@@ -78,6 +86,7 @@ internal fun deleteDownloadedLocalCopy(context: Context, item: LibraryItem): Lib
     return item.copy(mediaUri = source)
 }
 internal fun deleteLibraryItemAssociatedFiles(context: Context, item: LibraryItem) {
+    if (item.isPlaylistGroup()) return
     item.coverArtPath?.let { deleteAppOwnedFilePath(context, it) }
     cachedCoverPathForItem(context, item.id)?.let { deleteAppOwnedFilePath(context, it) }
     item.subtitleUri?.let { deleteAppOwnedMediaUri(context, it.toUri()) }
@@ -142,6 +151,7 @@ private fun isAppOwnedFile(context: Context, file: File): Boolean {
     }
 }
 internal fun LibraryItem.displaySourceLabel(context: Context): String {
+    if (isPlaylistGroup()) return context.getString(R.string.media_source_playlist)
     val source = sourceUrl
     return when {
         source != null && hasDownloadedLocalCopy() ->

@@ -15,8 +15,12 @@ import com.yausername.ffmpeg.execute
 import java.io.File
 
 internal fun LibraryItem.persistableMediaUri(actualMediaUri: String?): String {
-    if (sourceUrl == null || hasDownloadedLocalCopy()) return actualMediaUri ?: mediaUri
-    return sourceUrl
+    return persistableMediaUriForStorage(
+        sourceUrl = sourceUrl,
+        currentMediaUri = mediaUri,
+        actualMediaUri = actualMediaUri,
+        hasDownloadedLocalCopy = hasDownloadedLocalCopy()
+    )
 }
 internal fun extractMediaMetadata(context: Context, uri: Uri, itemId: String, isVideo: Boolean): MediaMetadataSnapshot {
     var retriever: MediaMetadataRetriever? = null

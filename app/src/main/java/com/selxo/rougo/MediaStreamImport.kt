@@ -825,6 +825,7 @@ internal fun selectPreferredYoutubeFormat(
     }
 }
 internal fun resolveYoutubeStreamUrl(context: Context, url: String, formatId: String?): String? {
+    StreamUrlCache.get(context, url, formatId)?.let { return it }
     if (!ensureMediaToolsReady(context)) return null
     val request = addFastYoutubeOptions(context, YoutubeDLRequest(url), url)
     if (formatId != null) {
@@ -835,11 +836,20 @@ internal fun resolveYoutubeStreamUrl(context: Context, url: String, formatId: St
     request.addOption("--print", "url")
     return try {
         val response = YoutubeDL.getInstance().execute(request, null, false)
-        response.out.lineSequence().firstOrNull { it.trim().startsWith("http") }?.trim()
+        response.out.lineSequence()
+            .firstOrNull { it.trim().startsWith("http") }
+            ?.trim()
+            ?.also { resolvedUrl ->
+                StreamUrlCache.put(context, url, formatId, resolvedUrl, detectStreamProvider(url))
+            }
     } catch (e: Exception) {
         e.printStackTrace()
         null
     }
+}
+
+internal fun invalidateResolvedStreamUrl(context: Context, url: String, formatId: String?) {
+    StreamUrlCache.invalidate(context, url, formatId)
 }
 private fun fetchYoutubeInfoJson(context: Context, url: String): JSONObject {
     check(ensureMediaToolsReady(context)) { "Media tools are unavailable." }

@@ -2,7 +2,6 @@ package com.selxo.rougo
 
 import android.content.Context
 import android.net.Uri
-import android.os.Build
 import android.provider.OpenableColumns
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.filled.*
@@ -12,6 +11,8 @@ import java.io.File
 import java.util.Locale
 
 fun parseSimpleSubtitles(context: Context, uri: Uri): List<SubtitleCue> {
+    val cacheKey = subtitleParseCacheKeyForUri(context, uri)
+    SubtitleParseCache.get(cacheKey)?.let { return it }
     val cues = mutableListOf<SubtitleCue>()
     try {
         val inputStream = if (uri.scheme == "file") File(uri.path!!).inputStream() else context.contentResolver.openInputStream(uri)
@@ -72,8 +73,49 @@ fun parseSimpleSubtitles(context: Context, uri: Uri): List<SubtitleCue> {
             }
         }
     } catch (e: Exception) { e.printStackTrace() }
-    return cues
+    return cues.also { SubtitleParseCache.put(cacheKey, it) }
 }
+
+internal fun subtitleParseCacheKey(uriString: String, length: Long?, lastModified: Long?): String {
+    return listOf(
+        uriString.trim(),
+        length?.takeIf { it >= 0L }?.toString() ?: "?",
+        lastModified?.takeIf { it >= 0L }?.toString() ?: "?"
+    ).joinToString(separator = "\u001f")
+}
+
+private fun subtitleParseCacheKeyForUri(context: Context, uri: Uri): String {
+    if (uri.scheme == "file") {
+        val file = File(uri.path.orEmpty())
+        return subtitleParseCacheKey(
+            uriString = uri.toString(),
+            length = file.takeIf { it.exists() }?.length(),
+            lastModified = file.takeIf { it.exists() }?.lastModified()
+        )
+    }
+
+    return subtitleParseCacheKey(
+        uriString = uri.toString(),
+        length = queryContentSize(context, uri),
+        lastModified = null
+    )
+}
+
+private fun queryContentSize(context: Context, uri: Uri): Long? {
+    return try {
+        context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) {
+                val index = cursor.getColumnIndex(OpenableColumns.SIZE)
+                if (index >= 0 && !cursor.isNull(index)) cursor.getLong(index) else null
+            } else {
+                null
+            }
+        }
+    } catch (e: Exception) {
+        null
+    }
+}
+
 fun findSubtitleCue(cues: List<SubtitleCue>, timeMs: Long): SubtitleCue? {
     var low = 0
     var high = cues.lastIndex
