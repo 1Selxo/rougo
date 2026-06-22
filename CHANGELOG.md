@@ -1,5 +1,7 @@
 # Changelog
 
+## V2.7.6 - 2026-06-23
+- Supported browser playlists and collapsible folders.
 ## V2.7.5 - 2026-06-22
 
 - Imported YouTube playlists as library folders with videos grouped under them.
@@ -90,3 +92,4 @@
 - Added startup crash reporting with copyable diagnostics.
 - Fixed release crashes caused by stripped media-tool runtime classes.
 - Updated the installed app name to `朗語`.
+
