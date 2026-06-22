@@ -174,6 +174,7 @@ fun MainAppFlow(
     var activeItem by remember { mutableStateOf<LibraryItem?>(null) }
     var libraryItems by remember { mutableStateOf(libraryManager.getItems()) }
     var manualVideoUrl by remember { mutableStateOf<String?>(null) }
+    var collapsedLibraryFolderIds by remember { mutableStateOf(emptySet<String>()) }
 
     val pendingVideoUrl = sharedUrl ?: manualVideoUrl
     fun clearPendingVideoUrl() {
@@ -217,12 +218,14 @@ fun MainAppFlow(
             },
             onOpenSettings = { currentScreen = AppScreen.Settings },
             onOpenYoutubeBrowser = { currentScreen = AppScreen.YoutubeBrowser },
-            onAddLink = { url -> manualVideoUrl = url }
+            onAddLink = { url -> manualVideoUrl = url },
+            collapsedFolderIds = collapsedLibraryFolderIds,
+            onCollapsedFolderIdsChanged = { collapsedLibraryFolderIds = it }
         )
     } else if (currentScreen == AppScreen.YoutubeBrowser) {
         YouTubeBrowserScreen(
             onBack = { currentScreen = AppScreen.Library },
-            onOpenVideo = { url -> manualVideoUrl = url }
+            onOpenYoutubeUrl = { url -> manualVideoUrl = url }
         )
     } else if (currentScreen == AppScreen.Settings) {
         BackHandler { currentScreen = AppScreen.Library }

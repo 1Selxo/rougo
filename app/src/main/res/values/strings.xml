@@ -49,6 +49,8 @@
     <string name="library_folder_name_label">Folder name</string>
     <string name="library_move_to_folder_title">Move to Folder</string>
     <string name="library_move_no_folder">No folder</string>
+    <string name="library_collapse_folder">Collapse folder</string>
+    <string name="library_expand_folder">Expand folder</string>
     <string name="library_created_folder_toast">Folder created.</string>
     <string name="library_moved_item_toast">Moved item.</string>
     <string name="library_import_playlist_title">Import Playlist</string>

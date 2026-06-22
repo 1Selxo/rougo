@@ -75,6 +75,9 @@ private fun LibraryControlsCollapseHandle(
 private fun LibraryPlaylistGroupCard(
     item: LibraryItem,
     childCount: Int,
+    isExpanded: Boolean,
+    canToggleExpansion: Boolean,
+    onToggleExpanded: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit
 ) {
@@ -124,6 +127,17 @@ private fun LibraryPlaylistGroupCard(
                     }
                 )
             }
+            if (canToggleExpansion) {
+                IconButton(onClick = onToggleExpanded, modifier = Modifier.size(44.dp)) {
+                    Icon(
+                        if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                        contentDescription = stringResource(
+                            if (isExpanded) R.string.library_collapse_folder else R.string.library_expand_folder
+                        ),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
             IconButton(onClick = onRename, modifier = Modifier.size(44.dp)) {
                 Icon(
                     Icons.Default.Edit,
@@ -150,7 +164,9 @@ fun LibraryScreen(
     onDelete: (LibraryItem) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenYoutubeBrowser: () -> Unit,
-    onAddLink: (String) -> Unit
+    onAddLink: (String) -> Unit,
+    collapsedFolderIds: Set<String> = emptySet(),
+    onCollapsedFolderIdsChanged: (Set<String>) -> Unit = {}
 ) {
     val context = LocalContext.current
     val importScope = rememberCoroutineScope()
@@ -211,10 +227,11 @@ fun LibraryScreen(
         }
     }
 
-    val displayRows = remember(items, searchQuery, selectedFilter, sortMode) {
-        libraryDisplayRows(items, searchQuery, selectedFilter, sortMode)
-    }
     val folderItems = remember(items) { items.filter { it.isFolderGroup() } }
+    val folderIds = remember(folderItems) { folderItems.map { it.id }.toSet() }
+    val displayRows = remember(items, searchQuery, selectedFilter, sortMode, collapsedFolderIds) {
+        libraryDisplayRows(items, searchQuery, selectedFilter, sortMode, collapsedFolderIds)
+    }
 
     val totalRecordings = remember(items) { items.sumOf { it.recordings.size } }
     val inProgressCount = remember(items) { items.count { it.duration > 0L && it.progress > 0L } }
@@ -241,6 +258,13 @@ fun LibraryScreen(
             }
         }
         if (changed) onRefresh()
+    }
+
+    LaunchedEffect(folderIds, collapsedFolderIds) {
+        val prunedCollapsedFolderIds = collapsedFolderIds.intersect(folderIds)
+        if (prunedCollapsedFolderIds != collapsedFolderIds) {
+            onCollapsedFolderIdsChanged(prunedCollapsedFolderIds)
+        }
     }
 
     fun savePendingMedia(subtitleUri: Uri?) {
@@ -508,9 +532,21 @@ fun LibraryScreen(
                         }
                     ) { row ->
                         if (row is LibraryDisplayRow.PlaylistGroup) {
+                            val canToggleExpansion = row.childCount > 0 && searchQuery.trim().isEmpty()
                             LibraryPlaylistGroupCard(
                                 item = row.item,
                                 childCount = row.childCount,
+                                isExpanded = row.isExpanded,
+                                canToggleExpansion = canToggleExpansion,
+                                onToggleExpanded = {
+                                    onCollapsedFolderIdsChanged(
+                                        if (row.isExpanded) {
+                                            collapsedFolderIds + row.item.id
+                                        } else {
+                                            collapsedFolderIds - row.item.id
+                                        }
+                                    )
+                                },
                                 onRename = {
                                     renameFolderItem = row.item
                                     renameFolderTitle = row.item.title

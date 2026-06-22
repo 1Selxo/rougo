@@ -311,15 +311,24 @@ internal fun createFastYoutubeLibraryItem(stream: FastYoutubeStream, sourceUrl: 
         httpReferer = stream.httpReferer
     )
 }
+internal fun youtubeBrowserOpenableUrl(url: String): String? {
+    return playableYoutubeUrl(url) ?: url.takeIf { isYoutubePlaylistUrl(it) }
+}
+
 internal class YoutubeBrowserBridge(
-    private val onVideoUrl: (String) -> Unit
+    private val onYoutubeUrl: (String) -> Unit
 ) {
     private val mainHandler = Handler(Looper.getMainLooper())
 
     @JavascriptInterface
     fun openVideo(url: String?) {
-        val videoUrl = url?.takeIf { it.isNotBlank() } ?: return
-        mainHandler.post { onVideoUrl(videoUrl) }
+        openYoutubeUrl(url)
+    }
+
+    @JavascriptInterface
+    fun openYoutubeUrl(url: String?) {
+        val youtubeUrl = url?.takeIf { it.isNotBlank() } ?: return
+        mainHandler.post { onYoutubeUrl(youtubeUrl) }
     }
 }
 internal fun youtubeBrowserInterceptScript(): String {
@@ -328,7 +337,7 @@ internal fun youtubeBrowserInterceptScript(): String {
             if (window.__rougoYoutubeBridgeInstalled) return;
             window.__rougoYoutubeBridgeInstalled = true;
 
-            function isVideoUrl(rawUrl) {
+            function isRougoYoutubeUrl(rawUrl) {
                 try {
                     var url = new URL(rawUrl, window.location.href);
                     var host = url.hostname.toLowerCase();
@@ -342,8 +351,8 @@ internal fun youtubeBrowserInterceptScript(): String {
             }
 
             function openInRougo(rawUrl) {
-                if (!isVideoUrl(rawUrl) || !window.RougoYoutube) return false;
-                window.RougoYoutube.openVideo(new URL(rawUrl, window.location.href).href);
+                if (!isRougoYoutubeUrl(rawUrl) || !window.RougoYoutube) return false;
+                window.RougoYoutube.openYoutubeUrl(new URL(rawUrl, window.location.href).href);
                 return true;
             }
 

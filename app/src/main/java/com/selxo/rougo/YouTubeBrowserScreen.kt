@@ -32,7 +32,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 @Composable
 fun YouTubeBrowserScreen(
     onBack: () -> Unit,
-    onOpenVideo: (String) -> Unit
+    onOpenYoutubeUrl: (String) -> Unit
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
     var canGoBack by remember { mutableStateOf(false) }
@@ -42,10 +42,10 @@ fun YouTubeBrowserScreen(
         canGoBack = view?.canGoBack() == true
     }
 
-    fun openVideoIfPlayable(rawUrl: String?): Boolean {
-        val videoUrl = rawUrl?.let { playableYoutubeUrl(it) } ?: return false
+    fun openYoutubeUrlIfSupported(rawUrl: String?): Boolean {
+        val youtubeUrl = rawUrl?.let { youtubeBrowserOpenableUrl(it) } ?: return false
         stopYoutubeWebViewPlayback(webView)
-        onOpenVideo(videoUrl)
+        onOpenYoutubeUrl(youtubeUrl)
         return true
     }
 
@@ -139,23 +139,23 @@ fun YouTubeBrowserScreen(
                             settings.safeBrowsingEnabled = true
                         }
                         addJavascriptInterface(
-                            YoutubeBrowserBridge { url -> openVideoIfPlayable(url) },
+                            YoutubeBrowserBridge { url -> openYoutubeUrlIfSupported(url) },
                             "RougoYoutube"
                         )
 
                         webViewClient = object : WebViewClient() {
                             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                                 if (request?.isForMainFrame == false) return false
-                                return openVideoIfPlayable(request?.url?.toString())
+                                return openYoutubeUrlIfSupported(request?.url?.toString())
                             }
 
                             @Deprecated("Deprecated in Java")
                             override fun shouldOverrideUrlLoading(view: WebView?, url: String?): Boolean {
-                                return openVideoIfPlayable(url)
+                                return openYoutubeUrlIfSupported(url)
                             }
 
                             override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
-                                if (openVideoIfPlayable(url)) {
+                                if (openYoutubeUrlIfSupported(url)) {
                                     view?.stopLoading()
                                     return
                                 }
@@ -164,7 +164,7 @@ fun YouTubeBrowserScreen(
                             }
 
                             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                if (openVideoIfPlayable(url)) {
+                                if (openYoutubeUrlIfSupported(url)) {
                                     view?.stopLoading()
                                     return
                                 }
@@ -183,7 +183,7 @@ fun YouTubeBrowserScreen(
                             override fun onProgressChanged(view: WebView?, newProgress: Int) {
                                 isLoading = newProgress < 100
                                 if (newProgress >= 25) installYoutubeBridge(view)
-                                if (newProgress >= 100) openVideoIfPlayable(view?.url)
+                                if (newProgress >= 100) openYoutubeUrlIfSupported(view?.url)
                                 updateNavigationState(view)
                             }
                         }

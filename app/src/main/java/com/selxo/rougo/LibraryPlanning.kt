@@ -16,7 +16,11 @@ internal data class PlaylistImportPlan(
 )
 
 internal sealed class LibraryDisplayRow {
-    data class PlaylistGroup(val item: LibraryItem, val childCount: Int) : LibraryDisplayRow()
+    data class PlaylistGroup(
+        val item: LibraryItem,
+        val childCount: Int,
+        val isExpanded: Boolean
+    ) : LibraryDisplayRow()
     data class Media(val item: LibraryItem, val isPlaylistChild: Boolean) : LibraryDisplayRow()
 }
 
@@ -78,7 +82,8 @@ internal fun libraryDisplayRows(
     items: List<LibraryItem>,
     searchQuery: String,
     selectedFilter: String,
-    sortMode: String
+    sortMode: String,
+    collapsedGroupIds: Set<String> = emptySet()
 ): List<LibraryDisplayRow> {
     val query = searchQuery.trim().lowercase(Locale.US)
     val media = items.filter { !it.isFolderGroup() }
@@ -97,9 +102,13 @@ internal fun libraryDisplayRows(
             )
             val groupMatches = matchesLibraryQuery(topLevelItem, query) && matchesLibraryFilter(topLevelItem, selectedFilter)
             if (groupMatches || children.isNotEmpty()) {
-                rows += LibraryDisplayRow.PlaylistGroup(topLevelItem, mediaByParent[topLevelItem.id].orEmpty().size)
-                children.forEach { child ->
-                    rows += LibraryDisplayRow.Media(child, isPlaylistChild = true)
+                val childCount = mediaByParent[topLevelItem.id].orEmpty().size
+                val isExpanded = topLevelItem.id !in collapsedGroupIds || query.isNotEmpty()
+                rows += LibraryDisplayRow.PlaylistGroup(topLevelItem, childCount, isExpanded)
+                if (isExpanded) {
+                    children.forEach { child ->
+                        rows += LibraryDisplayRow.Media(child, isPlaylistChild = true)
+                    }
                 }
             }
         } else if (topLevelItem.id in visibleTopLevelMediaIds) {

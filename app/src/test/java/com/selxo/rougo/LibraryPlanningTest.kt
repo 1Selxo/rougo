@@ -1,6 +1,7 @@
 package com.selxo.rougo
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -85,6 +86,69 @@ class LibraryPlanningTest {
                 }
             }
         )
+    }
+
+    @Test
+    fun collapsedFoldersHideChildren() {
+        val folder = buildLibraryFolder("Drama clips") { "folder-1" }
+        val child = LibraryItem(
+            id = "clip-1",
+            title = "Clip",
+            mediaUri = "file:///clip.mp4",
+            subtitleUri = null,
+            progress = 0L,
+            duration = 0L,
+            isVideo = true,
+            parentId = folder.id
+        )
+
+        val rows = libraryDisplayRows(
+            listOf(folder, child),
+            searchQuery = "",
+            selectedFilter = "All",
+            sortMode = "Recent",
+            collapsedGroupIds = setOf(folder.id)
+        )
+
+        assertEquals(1, rows.size)
+        val group = rows.single() as LibraryDisplayRow.PlaylistGroup
+        assertEquals(folder.id, group.item.id)
+        assertEquals(1, group.childCount)
+        assertFalse(group.isExpanded)
+    }
+
+    @Test
+    fun searchTemporarilyExpandsCollapsedFoldersForMatchingChildren() {
+        val folder = buildLibraryFolder("Drama clips") { "folder-1" }
+        val child = LibraryItem(
+            id = "clip-1",
+            title = "Clip",
+            mediaUri = "file:///clip.mp4",
+            subtitleUri = null,
+            progress = 0L,
+            duration = 0L,
+            isVideo = true,
+            parentId = folder.id
+        )
+
+        val rows = libraryDisplayRows(
+            listOf(folder, child),
+            searchQuery = "clip",
+            selectedFilter = "All",
+            sortMode = "Recent",
+            collapsedGroupIds = setOf(folder.id)
+        )
+
+        assertEquals(
+            listOf(folder.id, child.id),
+            rows.map {
+                when (it) {
+                    is LibraryDisplayRow.PlaylistGroup -> it.item.id
+                    is LibraryDisplayRow.Media -> it.item.id
+                }
+            }
+        )
+        assertTrue((rows.first() as LibraryDisplayRow.PlaylistGroup).isExpanded)
     }
 
     @Test
