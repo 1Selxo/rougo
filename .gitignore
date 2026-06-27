@@ -20,4 +20,7 @@ BUILDING.md
 /screenshots/
 media/draft/
 /hoshidicts/build/
+/windows/build/
+/windows/.gradle/
+/windows/.kotlin/
 /local-build-install.sh

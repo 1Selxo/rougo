@@ -42,7 +42,12 @@ private const val MAX_WAVEFORM_DECODE_DURATION_MS = 120_000L
 private const val MAX_WAVEFORM_PCM_BYTES = 32L * 1024L * 1024L
 private const val PITCH_MIN_HZ = 50f
 private const val PITCH_MAX_HZ = 650f
-private const val YIN_THRESHOLD = 0.20f
+private const val YIN_THRESHOLD = 0.22f
+private const val PITCH_FRAME_RMS_RATIO = 0.09f
+private const val PITCH_MIN_FRAME_RMS = 0.0009f
+private const val PITCH_MAX_FRAME_RMS = 0.017f
+private const val PITCH_FALLBACK_MAX_CMND = 0.36f
+private const val PITCH_MIN_CONFIDENCE = 0.55f
 private data class DecodedPcm(
     val bytes: ByteArray,
     val sampleRate: Int,
@@ -500,7 +505,7 @@ private fun estimatePitchContourYin(
 
     val targetFrameSize = (sampleRate * 0.085f).roundToInt()
     val frameSize = targetFrameSize.coerceIn(maxTau * 2, minOf(samples.size, 4096))
-    val minFrameRms = (globalRms * 0.10f).coerceIn(0.001f, 0.018f)
+    val minFrameRms = (globalRms * PITCH_FRAME_RMS_RATIO).coerceIn(PITCH_MIN_FRAME_RMS, PITCH_MAX_FRAME_RMS)
     val rawPitches = MutableList<Float?>(bucketCount) { null }
 
     for (bucket in 0 until bucketCount) {
@@ -576,7 +581,7 @@ private fun estimatePitchYinFrame(
                 minIndex = candidate
             }
         }
-        if (minValue > 0.34f) return null
+        if (minValue > PITCH_FALLBACK_MAX_CMND) return null
         bestTau = minIndex
     }
 
@@ -587,7 +592,7 @@ private fun estimatePitchYinFrame(
     if (hz !in PITCH_MIN_HZ..PITCH_MAX_HZ) return null
 
     val confidence = (1f - cmnd[bestTau]).coerceIn(0f, 1f)
-    if (confidence < 0.58f) return null
+    if (confidence < PITCH_MIN_CONFIDENCE) return null
 
     return PitchEstimate(hz, confidence)
 }
@@ -657,7 +662,13 @@ fun estimatePitch(samples: ShortArray, sampleRate: Int, channels: Int = 1): Floa
     var sumSq = 0.0
     for (sample in mono) sumSq += (sample * sample).toDouble()
     val rms = kotlin.math.sqrt(sumSq / mono.size).toFloat()
-    return estimatePitchYinFrame(mono, 0, mono.size, sampleRate, (rms * 0.10f).coerceAtLeast(0.001f))?.hz
+    return estimatePitchYinFrame(
+        mono,
+        0,
+        mono.size,
+        sampleRate,
+        (rms * PITCH_FRAME_RMS_RATIO).coerceAtLeast(PITCH_MIN_FRAME_RMS)
+    )?.hz
 }
 internal fun pitchDisplayScale(pitches: List<Float?>): PitchScale? {
     val logs = pitches

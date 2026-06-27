@@ -38,6 +38,8 @@
 3. Install the APK on your Android device.
 4. Open 朗語 and add local media, or share a YouTube link into the app.
 
+For Windows, download `Rougo-<version>.exe` or `Rougo-<version>.msi` from the same release. The Windows installer bundles VLC, FFmpeg, yt-dlp, and noise-suppression assets.
+
 ## Building
 
 ### Requirements
@@ -61,9 +63,13 @@ Release APKs are generated under:
 app/build/outputs/apk/release/
 ```
 
+### Windows Desktop Port
+
+The Windows port lives in `windows/` and includes a Compose Desktop app plus bundled media tooling for installer builds. See [`windows/README.md`](windows/README.md) for setup, run, package, data migration, and platform-difference notes.
+
 ## Releases
 
-GitHub Actions builds release APKs from version tags such as `V2.7`. Published releases include separate APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`.
+GitHub Actions builds release APKs and Windows installers from version tags such as `V2.7.7`. Published releases include separate APKs for `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`, plus Windows `.exe` and `.msi` installers.
 
 ## License
 

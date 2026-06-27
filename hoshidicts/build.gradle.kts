@@ -9,6 +9,7 @@ version = System.getenv("VERSION") ?: "local-SNAPSHOT"
 android {
     namespace = "de.manhhao.hoshi"
     compileSdk = 36
+    ndkVersion = "27.0.12077973"
 
     defaultConfig {
         minSdk = 24
