@@ -84,22 +84,18 @@ jobs:
       - name: Verify packaged JavaFX Swing runtime
         shell: pwsh
         run: |
-          $runtimeJava = Get-ChildItem windows\build\compose\binaries\main -Filter java.exe -Recurse |
-            Where-Object { $_.FullName -match '[\\/]runtime[\\/]bin[\\/]java\.exe$' } |
+          $runtimeModules = Get-ChildItem windows\build\compose\binaries\main -File -Filter modules -Recurse |
+            Where-Object { $_.FullName -match '[\\/]runtime[\\/]lib[\\/]modules$' } |
             Select-Object -First 1
-          if (-not $runtimeJava) {
-            throw 'Packaged runtime java.exe was not found'
+          if (-not $runtimeModules) {
+            throw 'Packaged runtime module image was not found'
           }
 
-          $modules = & $runtimeJava.FullName --list-modules
-          if ($LASTEXITCODE -ne 0 -or $modules -notmatch '^jdk\.unsupported\.desktop@') {
+          $runtimeContents = & "$env:JAVA_HOME\bin\jimage.exe" list $runtimeModules.FullName
+          if ($LASTEXITCODE -ne 0 -or -not ($runtimeContents -match '^Module: jdk\.unsupported\.desktop$')) {
             throw 'Packaged runtime is missing jdk.unsupported.desktop'
           }
-
-          $runtimeHome = Split-Path (Split-Path $runtimeJava.FullName)
-          $classMatch = & "$env:JAVA_HOME\bin\jimage.exe" list "$runtimeHome\lib\modules" |
-            Select-String 'jdk/swing/interop/SwingInterOpUtils.class'
-          if (-not $classMatch) {
+          if (-not ($runtimeContents -match 'jdk/swing/interop/SwingInterOpUtils\.class')) {
             throw 'Packaged runtime is missing jdk.swing.interop.SwingInterOpUtils'
           }
 
