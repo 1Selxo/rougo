@@ -84,7 +84,7 @@ jobs:
       - name: Verify packaged JavaFX Swing runtime
         shell: pwsh
         run: |
-          $runtimeModules = Get-ChildItem windows\build\compose\binaries\main -File -Filter modules -Recurse |
+          $runtimeModules = Get-ChildItem windows\build\compose -File -Filter modules -Recurse |
             Where-Object { $_.FullName -match '[\\/]runtime[\\/]lib[\\/]modules$' } |
             Select-Object -First 1
           if (-not $runtimeModules) {
