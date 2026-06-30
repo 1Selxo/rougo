@@ -6,6 +6,16 @@ on:
       - 'V*'
       - 'v*'
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing release tag to update (leave blank for a build-only run)
+        required: false
+        type: string
+      windows_only:
+        description: Build and replace only the Windows installers
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -13,6 +23,7 @@ permissions:
 jobs:
   android:
     name: Build Android APKs
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.windows_only != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -70,6 +81,28 @@ jobs:
         shell: pwsh
         run: .\gradlew.bat -p windows packageDistributionForCurrentOS --stacktrace --no-daemon
 
+      - name: Verify packaged JavaFX Swing runtime
+        shell: pwsh
+        run: |
+          $runtimeJava = Get-ChildItem windows\build\compose\binaries\main -Filter java.exe -Recurse |
+            Where-Object { $_.FullName -match '[\\/]runtime[\\/]bin[\\/]java\.exe$' } |
+            Select-Object -First 1
+          if (-not $runtimeJava) {
+            throw 'Packaged runtime java.exe was not found'
+          }
+
+          $modules = & $runtimeJava.FullName --list-modules
+          if ($LASTEXITCODE -ne 0 -or $modules -notmatch '^jdk\.unsupported\.desktop@') {
+            throw 'Packaged runtime is missing jdk.unsupported.desktop'
+          }
+
+          $runtimeHome = Split-Path (Split-Path $runtimeJava.FullName)
+          $classMatch = & "$env:JAVA_HOME\bin\jimage.exe" list "$runtimeHome\lib\modules" |
+            Select-String 'jdk/swing/interop/SwingInterOpUtils.class'
+          if (-not $classMatch) {
+            throw 'Packaged runtime is missing jdk.swing.interop.SwingInterOpUtils'
+          }
+
       - name: Upload Windows installer artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -81,7 +114,11 @@ jobs:
 
   release:
     name: Publish GitHub release
-    if: startsWith(github.ref, 'refs/tags/')
+    if: >-
+      always() &&
+      needs.windows.result == 'success' &&
+      (needs.android.result == 'success' || needs.android.result == 'skipped') &&
+      (startsWith(github.ref, 'refs/tags/') || inputs.release_tag != '')
     needs:
       - android
       - windows
@@ -100,7 +137,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/**/*
-          name: ${{ github.ref_name }}
+          tag_name: ${{ inputs.release_tag || github.ref_name }}
+          name: ${{ inputs.release_tag || github.ref_name }}
           draft: false
           prerelease: false
           make_latest: true

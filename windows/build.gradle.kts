@@ -148,6 +148,9 @@ compose.desktop {
         mainClass = "com.selxo.rougo.windows.MainKt"
 
         nativeDistributions {
+            // JavaFX's Swing bridge reaches this module reflectively, so jdeps does not
+            // discover it when Compose builds the trimmed installer runtime.
+            modules("jdk.unsupported.desktop")
             appResourcesRootDir.set(layout.buildDirectory.dir("appResources"))
             targetFormats(
                 org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe,

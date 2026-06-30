@@ -3,6 +3,7 @@
 ## V2.7.7 - 2026-06-27
 
 - Added the Windows desktop port with Compose Desktop, bundled VLC, yt-dlp, FFmpeg/ffprobe, and RNNoise assets for minimal installation.
+- Fixed the Windows JavaFX player crash by including `jdk.unsupported.desktop` in the bundled runtime image.
 - Matched Windows playback, shadowing, subtitle, dictionary lookup, waveform, and pitch-analysis behavior more closely to Android.
 - Fixed Windows YouTube playback refresh for expired signed stream URLs and queued playback while streams resolve.
 - Fixed Windows subtitle overlay lookup hit testing and kept captions over the video instead of taking layout space.
